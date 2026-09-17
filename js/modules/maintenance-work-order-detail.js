@@ -1,5 +1,5 @@
 /**
- * MAINTENANCE-WORK-ORDER-DETAIL.JS — Individual work order execution, cost tracking, and photo uploads.
+ * MAINTENANCE-WORK-ORDER-DETAIL.JS — Work order execution, photo uploads, and receipt attachments.
  */
 import { supabase, getUserProfile, formatDate, formatNaira, escapeHtml, uploadFile } from '../config.js';
 import { showToast, performLogout } from '../auth.js';
@@ -9,13 +9,13 @@ if (content) initWorkOrderDetail();
 
 let workOrderId = null;
 let workOrder = null;
+let orgId = null;
 
 export async function initWorkOrderDetail() {
   const profile = await getUserProfile();
   if (!profile) return;
-  const orgId = profile.organization_id;
+  orgId = profile.organization_id;
 
-  // Hydrate header & sidebar
   const fullName = profile.full_name || 'Maintenance Officer';
   const initials = fullName.split(/\s+/).map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'MO';
   
@@ -29,12 +29,12 @@ export async function initWorkOrderDetail() {
   if (sidebarName) sidebarName.textContent = fullName;
   if (sidebarInitial) sidebarInitial.textContent = initials;
 
-  let orgName = 'TransCore Logistics';
   if (orgId) {
     const { data: org } = await supabase.from('organizations').select('name').eq('id', orgId).maybeSingle();
-    if (org?.name) orgName = org.name;
+    if (org?.name) {
+      document.querySelectorAll('#fc-org-name').forEach(el => el.textContent = org.name);
+    }
   }
-  document.querySelectorAll('#fc-org-name').forEach(el => el.textContent = orgName);
 
   workOrderId = new URLSearchParams(window.location.search).get('id');
   if (!workOrderId) {
@@ -118,20 +118,43 @@ function render() {
           </div>
         </section>
 
-        <!-- Cost & Parts Form -->
+        <!-- Cost & Document Attachment Form -->
         <section class="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
           <h3 class="font-display text-sm font-bold text-slate-900 flex items-center gap-2">
-            <i class="bi bi-receipt text-teal-600"></i> Material Cost & Replacement Parts
+            <i class="bi bi-receipt text-teal-600"></i> Material Cost & Invoiced Receipts
           </h3>
           <form class="flex flex-col gap-3.5 text-xs" id="wod-cost-form">
             <div>
               <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">Total Maintenance Cost (₦)</label>
               <input class="w-full sm:w-64 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-slate-900 focus:border-teal-500 focus:outline-none" id="wod-cost" min="0" type="number" value="${w.cost_naira || 0}"/>
             </div>
+
             <div>
               <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">Parts Notes & Workshop Remarks</label>
               <textarea class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none" id="wod-parts-notes" rows="3">${escapeHtml(w.parts_notes || '')}</textarea>
             </div>
+
+            <!-- Receipt Attachment Box -->
+            <div>
+              <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">Receipt / Invoice Document</label>
+              ${w.receipt_url ? `
+                <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                  <div class="flex items-center gap-2 truncate">
+                    <i class="bi bi-file-earmark-check text-teal-600 text-base"></i>
+                    <span class="font-semibold text-slate-800 truncate">${escapeHtml(w.receipt_name || 'Receipt Document')}</span>
+                  </div>
+                  <a href="${w.receipt_url}" target="_blank" class="px-3 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg text-xs font-bold text-slate-700 transition">
+                    View
+                  </a>
+                </div>` : `
+                <label class="block border-2 border-dashed border-slate-200 hover:border-teal-500 rounded-xl p-4 text-center cursor-pointer transition">
+                  <i class="bi bi-paperclip text-lg text-teal-600 block mb-1"></i>
+                  <span class="text-xs font-bold text-slate-700 block">Attach Job Sheet or Parts Bill</span>
+                  <span class="text-[10px] text-slate-400 block mt-0.5">Image, PDF, or Word Document</span>
+                  <input accept="image/*,.pdf,.doc,.docx" class="hidden" id="wod-receipt-input" type="file"/>
+                </label>`}
+            </div>
+
             <button class="self-start px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold transition shadow-sm" type="submit">
               Save Cost & Parts Records
             </button>
@@ -139,7 +162,7 @@ function render() {
         </section>
       </div>
 
-      <!-- Right 1 Col: Vehicle Card & Photos -->
+      <!-- Right 1 Col: Vehicle Card & Workshop Photos -->
       <div class="space-y-5">
         <section class="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm space-y-3">
           <div class="flex items-center gap-2 border-b border-slate-100 pb-2.5">
@@ -190,6 +213,7 @@ function render() {
   document.getElementById('wod-cost-form')?.addEventListener('submit', onSaveCost);
   document.getElementById('wod-before-input')?.addEventListener('change', (e) => onPhotoUpload(e, 'before_photo_url'));
   document.getElementById('wod-after-input')?.addEventListener('change', (e) => onPhotoUpload(e, 'after_photo_url'));
+  document.getElementById('wod-receipt-input')?.addEventListener('change', onReceiptUpload);
 }
 
 function renderActions() {
@@ -251,6 +275,31 @@ async function onSaveCost(e) {
   }
   showToast('Costs and workshop notes saved.', 'success');
   await loadWorkOrder();
+}
+
+async function onReceiptUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  showToast('Uploading receipt document...', 'info');
+
+  try {
+    const ext = file.name.split('.').pop();
+    const path = `${orgId}/${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext}`;
+    const { error: uploadErr } = await supabase.storage.from('work-order-documents').upload(path, file);
+    if (uploadErr) throw uploadErr;
+
+    const { data: publicUrlData } = supabase.storage.from('work-order-documents').getPublicUrl(path);
+    const { error } = await supabase.from('work_orders').update({
+      receipt_url: publicUrlData.publicUrl,
+      receipt_name: file.name
+    }).eq('id', workOrderId);
+
+    if (error) throw error;
+    showToast('Receipt attached successfully.', 'success');
+    await loadWorkOrder();
+  } catch (err) {
+    showToast(`Upload failed: ${err.message}`, 'error');
+  }
 }
 
 async function onPhotoUpload(e, column) {

@@ -1,8 +1,8 @@
 /**
- * BEX-RADAR.JS — Global telematics telemetry and cross-tenant unit tracking.
+ * BEX-RADAR.JS — Global telematics telemetry, cross-tenant unit tracking & Admin Broadcast.
  */
 import { supabase, getUserProfile, escapeHtml } from '../config.js';
-import { performLogout } from '../auth.js';
+import { showToast, performLogout } from '../auth.js';
 
 let map = null;
 let markers = {};
@@ -29,6 +29,13 @@ export async function initRadar() {
   await loadRadarFleet();
 
   document.getElementById('radar-org-filter')?.addEventListener('change', () => filterRadarPins());
+
+  // Broadcast Modal Event Listeners
+  const bcModal = document.getElementById('broadcast-modal');
+  document.getElementById('btn-open-broadcast')?.addEventListener('click', () => bcModal?.classList.remove('hidden'));
+  document.getElementById('broadcast-modal-close')?.addEventListener('click', () => bcModal?.classList.add('hidden'));
+  document.getElementById('broadcast-cancel-btn')?.addEventListener('click', () => bcModal?.classList.add('hidden'));
+  document.getElementById('broadcast-form')?.addEventListener('submit', onTransmitDirective);
 }
 
 function initLeafletMap() {
@@ -41,10 +48,18 @@ function initLeafletMap() {
 async function loadOrganizations() {
   const { data } = await supabase.from('organizations').select('id, name, company_code').order('name');
   orgs = data || [];
-  const select = document.getElementById('radar-org-filter');
-  if (select && orgs.length > 0) {
-    select.innerHTML = `<option value="all">All Fleets & Tenants</option>` +
+  
+  const filterSelect = document.getElementById('radar-org-filter');
+  const targetSelect = document.getElementById('bc-org-target');
+
+  if (filterSelect && orgs.length > 0) {
+    filterSelect.innerHTML = `<option value="all">All Fleets & Tenants</option>` +
       orgs.map(o => `<option value="${o.id}">${escapeHtml(o.name)} (${escapeHtml(o.company_code || 'TC')})</option>`).join('');
+  }
+
+  if (targetSelect && orgs.length > 0) {
+    targetSelect.innerHTML = `<option value="all">All Registered Tenants (Global Broadcast)</option>` +
+      orgs.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('');
   }
 }
 
@@ -53,9 +68,15 @@ window.loadRadarFleet = async function() {
   const countBadge = document.getElementById('radar-live-count');
 
   try {
+    // FIX: Explicitly specify foreign key relation (!driver_id and !vehicle_id) to avoid ambiguous embedding error
     const { data, error } = await supabase
       .from('trips')
-      .select('*, vehicle:vehicles(plate_number, make, model), driver:profiles(full_name, phone_number), organization:organizations(name, company_code)')
+      .select(`
+        *,
+        vehicle:vehicles!vehicle_id(plate_number, make, model),
+        driver:profiles!driver_id(full_name, phone_number),
+        organization:organizations!organization_id(name, company_code)
+      `)
       .eq('status', 'in_progress');
 
     if (error) throw error;
@@ -149,6 +170,54 @@ window.zoomToVehicle = function(tripId) {
     m.openPopup();
   }
 };
+
+/**
+ * Bex Admin: Broadcast Directive Handler targeting Org Admins & Managers
+ */
+async function onTransmitDirective(e) {
+  e.preventDefault();
+  const btn = document.getElementById('broadcast-submit-btn');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Broadcasting...';
+
+  const orgTarget = document.getElementById('bc-org-target').value;
+  const roleTarget = document.getElementById('bc-role-target').value;
+  const title = document.getElementById('bc-title').value.trim();
+  const message = document.getElementById('bc-message').value.trim();
+
+  try {
+    const orgIds = orgTarget === 'all' ? orgs.map(o => o.id) : [orgTarget];
+
+    // Insert management notification rows
+    const inserts = orgIds.map(oId => ({
+      organization_id: oId,
+      title: `[DIRECTIVE] ${title}`,
+      message: message,
+      target_role: roleTarget,
+      is_broadcast: true,
+      created_at: new Date().toISOString()
+    }));
+
+    await supabase.from('notifications').insert(inserts);
+
+    // Transmit instant broadcast event via Supabase Realtime channel
+    await supabase.channel('global-fleet-broadcast').send({
+      type: 'broadcast',
+      event: 'urgent-alert',
+      payload: { message: `[DIRECTIVE] ${title}: ${message}`, role: roleTarget }
+    });
+
+    showToast('Platform directive successfully transmitted to management.', 'success');
+    document.getElementById('broadcast-modal').classList.add('hidden');
+    document.getElementById('broadcast-form').reset();
+  } catch (err) {
+    showToast(`Broadcast failed: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
 
 document.getElementById('logout-btn')?.addEventListener('click', () => {
   if (confirm('Sign out from Bex Admin Console?')) performLogout();

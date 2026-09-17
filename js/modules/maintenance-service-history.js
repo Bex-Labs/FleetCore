@@ -1,13 +1,14 @@
 /**
- * MAINTENANCE-SERVICE-HISTORY.JS — Searchable completed maintenance history.
+ * MAINTENANCE-SERVICE-HISTORY.JS — Searchable completed maintenance history, receipt retrieval & CSV/PDF export.
  */
 import { supabase, getUserProfile, formatDate, formatNaira, escapeHtml } from '../config.js';
-import { performLogout } from '../auth.js';
+import { showToast, performLogout } from '../auth.js';
 
 const tbody = document.getElementById('sh-tbody');
 if (tbody) initServiceHistory();
 
 let records = [];
+let currentOrg = null;
 let searchTerm = '';
 
 export async function initServiceHistory() {
@@ -15,7 +16,6 @@ export async function initServiceHistory() {
   if (!profile) return;
   const orgId = profile.organization_id;
 
-  // Hydrate header & sidebar
   const fullName = profile.full_name || 'Maintenance Officer';
   const initials = fullName.split(/\s+/).map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'MO';
   
@@ -29,12 +29,18 @@ export async function initServiceHistory() {
   if (sidebarName) sidebarName.textContent = fullName;
   if (sidebarInitial) sidebarInitial.textContent = initials;
 
-  let orgName = 'TransCore Logistics';
   if (orgId) {
-    const { data: org } = await supabase.from('organizations').select('name').eq('id', orgId).maybeSingle();
-    if (org?.name) orgName = org.name;
+    const { data: org } = await supabase.from('organizations').select('name, company_code').eq('id', orgId).maybeSingle();
+    if (org) {
+      currentOrg = org;
+      document.querySelectorAll('#fc-org-name').forEach(el => el.textContent = org.name);
+      const printOrg = document.getElementById('print-org-name');
+      if (printOrg) printOrg.textContent = org.name;
+    }
   }
-  document.querySelectorAll('#fc-org-name').forEach(el => el.textContent = orgName);
+
+  const printTime = document.getElementById('print-timestamp');
+  if (printTime) printTime.textContent = new Date().toLocaleString('en-NG');
 
   const { data, error } = await supabase
     .from('work_orders')
@@ -47,7 +53,7 @@ export async function initServiceHistory() {
   const empty = document.getElementById('sh-empty');
 
   if (error) {
-    tbody.innerHTML = `<tr><td colspan="5" class="py-8 text-center text-rose-500 text-xs">Failed to load: ${escapeHtml(error.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-rose-500 text-xs font-bold">Failed to load: ${escapeHtml(error.message)}</td></tr>`;
     return;
   }
 
@@ -65,6 +71,12 @@ export async function initServiceHistory() {
     searchTerm = e.target.value.trim().toLowerCase();
     render();
   });
+
+  document.getElementById('btn-export-csv')?.addEventListener('click', exportServiceHistoryCSV);
+  document.getElementById('btn-export-pdf')?.addEventListener('click', () => window.print());
+  document.getElementById('logout-btn')?.addEventListener('click', () => {
+    if (confirm('Sign out from Maintenance Console?')) performLogout();
+  });
 }
 
 function render() {
@@ -72,25 +84,63 @@ function render() {
   if (searchTerm) {
     list = list.filter(r =>
       (r.vehicle?.plate_number || '').toLowerCase().includes(searchTerm) ||
-      (r.service_type || '').toLowerCase().includes(searchTerm)
+      (r.service_type || '').toLowerCase().includes(searchTerm) ||
+      (r.parts_notes || '').toLowerCase().includes(searchTerm)
     );
   }
 
   if (list.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="py-8 text-center text-slate-400 text-xs">No matching service records found.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-slate-400 text-xs">No matching service records found.</td></tr>`;
     return;
   }
 
-  tbody.innerHTML = list.map(r => `
-    <tr class="hover:bg-slate-50 transition-colors">
-      <td class="py-3 px-4 font-mono font-bold text-slate-900">${r.vehicle ? escapeHtml(r.vehicle.plate_number) : '—'}</td>
-      <td class="py-3 px-4 font-bold text-slate-800">${escapeHtml(r.service_type || '—')}</td>
-      <td class="py-3 px-4 text-slate-500">${r.completed_at ? formatDate(r.completed_at) : '—'}</td>
-      <td class="py-3 px-4 font-mono font-bold text-slate-800">${formatNaira(r.cost_naira || 0)}</td>
-      <td class="py-3 px-4 text-slate-600">${escapeHtml(r.parts_notes || '—')}</td>
-    </tr>`).join('');
+  tbody.innerHTML = list.map(r => {
+    let receiptDoc = `<span class="text-slate-400 font-mono text-[11px]">—</span>`;
+    if (r.receipt_url) {
+      const isPdf = r.receipt_url.toLowerCase().endsWith('.pdf');
+      const isDoc = r.receipt_url.toLowerCase().includes('.doc');
+      const icon = isPdf ? 'bi-filetype-pdf text-rose-500' : isDoc ? 'bi-file-earmark-word text-blue-500' : 'bi-image text-teal-600';
+      receiptDoc = `
+        <a href="${r.receipt_url}" target="_blank" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition">
+          <i class="bi ${icon}"></i>
+          <span>Receipt</span>
+        </a>`;
+    }
+
+    return `
+      <tr class="hover:bg-slate-50 transition-colors">
+        <td class="py-3 px-4 font-mono font-bold text-slate-900">${r.vehicle ? escapeHtml(r.vehicle.plate_number) : '—'}</td>
+        <td class="py-3 px-4 font-bold text-slate-800">${escapeHtml(r.service_type || '—')}</td>
+        <td class="py-3 px-4 text-slate-500 font-mono">${r.completed_at ? formatDate(r.completed_at) : '—'}</td>
+        <td class="py-3 px-4">${receiptDoc}</td>
+        <td class="py-3 px-4 text-right font-mono font-bold text-slate-800">${formatNaira(r.cost_naira || 0)}</td>
+        <td class="py-3 px-4 text-right text-slate-600 max-w-xs truncate">${escapeHtml(r.parts_notes || '—')}</td>
+      </tr>`;
+  }).join('');
 }
 
-document.getElementById('logout-btn')?.addEventListener('click', () => {
-  if (confirm('Sign out from Maintenance Console?')) performLogout();
-});
+function exportServiceHistoryCSV() {
+  if (records.length === 0) {
+    showToast('No service records to export.', 'error');
+    return;
+  }
+
+  const headers = ['Vehicle_Plate', 'Service_Type', 'Date_Completed', 'Cost_NGN', 'Parts_Notes', 'Receipt_URL'];
+  const rows = records.map(r => [
+    `"${r.vehicle?.plate_number || ''}"`,
+    `"${r.service_type || ''}"`,
+    r.completed_at || '',
+    parseFloat(r.cost_naira || 0),
+    `"${r.parts_notes || ''}"`,
+    `"${r.receipt_url || ''}"`
+  ]);
+
+  const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const link = document.createElement('a');
+  link.setAttribute('href', encodeURI(csvContent));
+  link.setAttribute('download', `Service_History_${currentOrg?.company_code || 'FC'}_${new Date().toISOString().substring(0, 10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  showToast('Service history exported as CSV.', 'success');
+}

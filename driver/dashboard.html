@@ -188,25 +188,34 @@
           <div id="driver-map"></div>
         </section>
 
-        <!-- Trip Action Controls (Hold SOS Buttons + Start/End Trip) -->
+        <!-- Trip Action Controls (3 Hold SOS Buttons + Start/End Trip) -->
         <section class="bg-white border border-slate-200/80 rounded-2xl p-3.5 sm:p-4 shadow-sm space-y-3">
           <div class="flex items-center justify-between">
-            <h3 class="text-xs font-bold text-slate-800 uppercase tracking-wider">In-Cab Safety & Dispatch</h3>
+            <h3 class="text-xs font-bold text-slate-800 uppercase tracking-wider">In-Cab Safety & Crisis Dispatch</h3>
             <span class="text-[10px] font-bold text-slate-400">TOUCH & HOLD 5s</span>
           </div>
 
-          <!-- 5-Second Hold SOS Buttons -->
-          <div class="grid grid-cols-2 gap-2 sm:gap-3">
-            <button id="sos-btn" class="sos-btn w-full py-3.5 sm:py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black text-[11px] sm:text-xs uppercase tracking-wider shadow-md flex items-center justify-center gap-2 transition active:scale-95">
+          <!-- 3 Dedicated 5-Second Hold SOS Emergency Triggers -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
+            <!-- 1. Road / Collision SOS -->
+            <button id="sos-btn" class="sos-btn w-full py-3 sm:py-3.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black text-[11px] uppercase tracking-wider shadow-md flex items-center justify-center gap-1.5 transition active:scale-95">
               <div class="hold-progress" id="sos-progress"></div>
-              <i class="bi bi-exclamation-octagon-fill text-base"></i>
-              <span id="sos-label">HOLD · ROAD SOS</span>
+              <i class="bi bi-exclamation-octagon-fill text-sm"></i>
+              <span id="sos-label">ROAD SOS</span>
             </button>
 
-            <button id="health-sos-btn" class="sos-btn w-full py-3.5 sm:py-4 bg-purple-700 hover:bg-purple-800 text-white rounded-2xl font-black text-[11px] sm:text-xs uppercase tracking-wider shadow-md flex items-center justify-center gap-2 transition active:scale-95">
+            <!-- 2. Health / Medical SOS -->
+            <button id="health-sos-btn" class="sos-btn w-full py-3 sm:py-3.5 bg-purple-700 hover:bg-purple-800 text-white rounded-2xl font-black text-[11px] uppercase tracking-wider shadow-md flex items-center justify-center gap-1.5 transition active:scale-95">
               <div class="hold-progress" id="health-sos-progress"></div>
-              <i class="bi bi-heart-pulse-fill text-base"></i>
-              <span id="health-sos-label">HOLD · HEALTH SOS</span>
+              <i class="bi bi-heart-pulse-fill text-sm"></i>
+              <span id="health-sos-label">HEALTH SOS</span>
+            </button>
+
+            <!-- 3. Repair / Mechanical SOS -->
+            <button id="repair-sos-btn" class="sos-btn w-full py-3 sm:py-3.5 bg-amber-600 hover:bg-amber-700 text-white rounded-2xl font-black text-[11px] uppercase tracking-wider shadow-md flex items-center justify-center gap-1.5 transition active:scale-95">
+              <div class="hold-progress" id="repair-sos-progress"></div>
+              <i class="bi bi-wrench-adjustable-circle-fill text-sm"></i>
+              <span id="repair-sos-label">REPAIR SOS</span>
             </button>
           </div>
 

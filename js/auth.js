@@ -113,7 +113,9 @@ if (supabase) {
       window.location.pathname.includes('confirm.html')
     ) return;
 
+    // Do NOT auto-redirect if an explicit login attempt is running strict role validation
     if (event === 'SIGNED_IN' && session && isAuthPage) {
+      if (window.fcIsExplicitLogin) return;
       redirectByRole();
     }
     

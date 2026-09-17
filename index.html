@@ -222,6 +222,14 @@
       account_manager: "Fuel expenses, invoices, and fleet audit reports.",
     };
 
+    const ROLE_LABELS = {
+      company_admin: "Admin",
+      driver: "Driver",
+      maintenance_officer: "Service",
+      account_manager: "Finance",
+      bex_admin: "Platform Root"
+    };
+
     const ROLE_ROUTES = {
       company_admin: 'admin/dashboard.html',
       driver: 'driver/dashboard.html',
@@ -330,15 +338,40 @@
         if (!client) throw new Error('Connecting to Supabase... Please try again.');
 
         if (currentMode === 'login') {
+          // Suppress automatic listener redirect while checking the profile role
+          window.fcIsExplicitLogin = true;
+
           const { data, error } = await client.auth.signInWithPassword({ email, password });
           if (error) throw error;
-          
+
+          // Fetch verified role directly from public.profiles
+          const { data: profile, error: profileErr } = await client
+            .from('profiles')
+            .select('role')
+            .eq('id', data.user.id)
+            .single();
+
+          const actualRole = profile?.role || data.user.user_metadata?.role;
+
+          // Strict Role Validation Check
+          if (actualRole !== currentRole) {
+            await client.auth.signOut();
+            window.fcIsExplicitLogin = false;
+
+            const expectedTab = ROLE_LABELS[actualRole] || actualRole;
+            const chosenTab = ROLE_LABELS[currentRole] || currentRole;
+
+            showAlert(`This account is registered as ${expectedTab}, not ${chosenTab}. Please select the ${expectedTab} tab to sign in.`);
+            btn.disabled = false;
+            btnText.textContent = 'Sign In';
+            return;
+          }
+
           if (document.getElementById('remember')?.checked) {
             localStorage.setItem('fc_remember_email', email);
           }
 
-          const userRole = data?.user?.user_metadata?.role || currentRole;
-          window.location.href = ROLE_ROUTES[userRole] || ROLE_ROUTES[currentRole];
+          window.location.href = ROLE_ROUTES[actualRole];
         } else {
           const { data, error } = await client.auth.signUp({
             email,

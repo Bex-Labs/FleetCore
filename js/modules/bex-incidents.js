@@ -34,9 +34,16 @@ export async function initBexIncidents() {
 
 async function loadIncidents() {
   try {
+    // FIX: Provide explicit foreign key constraints (!organization_id, !vehicle_id, !driver_id)
+    // to prevent PostgREST auto-aliasing duplicate paths as organizations_1
     const { data, error } = await supabase
       .from('incidents')
-      .select('*, organization:organizations(name, company_code), vehicle:vehicles(plate_number), driver:profiles(full_name, phone_number)')
+      .select(`
+        *,
+        organization:organizations!organization_id(name, company_code),
+        vehicle:vehicles!vehicle_id(plate_number),
+        driver:profiles!driver_id(full_name, phone_number)
+      `)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -72,7 +79,7 @@ function renderTable() {
         <span class="font-mono text-[10px] text-teal-700 font-bold block">${escapeHtml(i.organization?.company_code || '—')}</span>
       </td>
       <td class="py-3 px-4">
-        <span class="font-bold text-rose-600 block text-xs capitalize">${escapeHtml(i.incident_type || 'Incident')}</span>
+        <span class="font-bold text-rose-600 block text-xs capitalize">${escapeHtml((i.incident_type || 'Incident').replace('_', ' '))}</span>
         <span class="text-[11px] text-slate-500 block truncate max-w-xs">${escapeHtml(i.description || 'No descriptive payload')}</span>
       </td>
       <td class="py-3 px-4 font-mono font-bold text-slate-800">

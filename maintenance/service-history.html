@@ -29,11 +29,33 @@
     .custom-scroll::-webkit-scrollbar { width: 6px; }
     .custom-scroll::-webkit-scrollbar-track { background: transparent; }
     .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+
+    @media print {
+      body { background: white !important; color: black !important; height: auto !important; overflow: visible !important; }
+      header, aside, #action-toolbar, #fc-toast-host, .no-print { display: none !important; }
+      main { padding: 0 !important; margin: 0 !important; overflow: visible !important; width: 100% !important; }
+      .print-card { border: 1px solid #e2e8f0 !important; box-shadow: none !important; }
+      .print-header { display: block !important; }
+    }
   </style>
 </head>
 <body class="bg-slate-50 text-slate-900 font-sans h-screen overflow-hidden flex flex-col antialiased" data-fc-guard="maintenance">
 
   <div id="fc-toast-host" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- Print Letterhead -->
+  <div class="hidden print-header p-6 border-b border-slate-200 mb-6">
+    <div class="flex justify-between items-center">
+      <div>
+        <h1 class="font-display text-2xl font-black text-slate-900 tracking-tight">FLEETCORE HISTORICAL SERVICE & AUDIT REGISTER</h1>
+        <p class="text-xs text-slate-500 mt-1">Closed Work Orders, Material Costs & Proof of Expense</p>
+      </div>
+      <div class="text-right text-xs font-mono">
+        <p id="print-timestamp">—</p>
+        <p class="font-bold text-slate-800" id="print-org-name">TransCore Logistics</p>
+      </div>
+    </div>
+  </div>
 
   <!-- Standard Top Navigation Bar -->
   <header class="bg-white border-b border-border-light h-16 w-full flex justify-between items-center px-4 sm:px-6 sticky top-0 z-30 shrink-0">
@@ -108,32 +130,44 @@
     </aside>
 
     <main class="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 custom-scroll">
-      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4" id="action-toolbar">
         <div>
           <h1 class="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Fleet Service History</h1>
-          <p class="text-xs sm:text-sm text-slate-500 mt-0.5">Searchable audit log of all completed work orders and maintenance costs.</p>
+          <p class="text-xs sm:text-sm text-slate-500 mt-0.5">Searchable audit log of completed work orders, parts receipts, and workshop costs.</p>
         </div>
 
-        <div class="relative w-full sm:w-72">
-          <i class="bi bi-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
-          <input class="w-full pl-9 pr-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:border-teal-500 focus:outline-none shadow-sm" id="sh-search" placeholder="Search plates or service issues..." type="text"/>
+        <div class="flex items-center gap-2">
+          <div class="relative w-full sm:w-64">
+            <i class="bi bi-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+            <input class="w-full pl-9 pr-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:border-teal-500 focus:outline-none shadow-sm" id="sh-search" placeholder="Search plates or service types..." type="text"/>
+          </div>
+
+          <button type="button" id="btn-export-csv" class="px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">
+            <i class="bi bi-filetype-csv text-emerald-600"></i>
+            <span>Export CSV</span>
+          </button>
+          <button type="button" id="btn-export-pdf" class="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">
+            <i class="bi bi-file-earmark-pdf text-rose-400"></i>
+            <span>Export PDF</span>
+          </button>
         </div>
       </div>
 
-      <div class="bg-white border border-slate-200/80 rounded-2xl overflow-hidden shadow-sm">
+      <div class="bg-white border border-slate-200/80 rounded-2xl overflow-hidden shadow-sm print-card">
         <div class="overflow-x-auto">
-          <table class="w-full text-left border-collapse">
+          <table class="w-full text-left border-collapse min-w-[760px]">
             <thead>
               <tr class="border-b border-slate-100 bg-slate-50/80 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                 <th class="py-3 px-4">Vehicle Plate</th>
                 <th class="py-3 px-4">Service Type</th>
                 <th class="py-3 px-4">Date Completed</th>
-                <th class="py-3 px-4">Total Cost (₦)</th>
-                <th class="py-3 px-4">Parts / Notes</th>
+                <th class="py-3 px-4">Receipt Doc</th>
+                <th class="py-3 px-4 text-right">Total Cost (₦)</th>
+                <th class="py-3 px-4 text-right">Workshop Remarks</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100 text-xs font-medium" id="sh-tbody">
-              <tr><td colspan="5" class="py-8 text-center text-slate-400">Loading service history...</td></tr>
+              <tr><td colspan="6" class="py-8 text-center text-slate-400">Loading service history...</td></tr>
             </tbody>
           </table>
         </div>

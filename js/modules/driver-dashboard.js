@@ -1,6 +1,6 @@
 /**
- * DRIVER-DASHBOARD.JS — Real-time telemetry, organization name resolution,
- * avatar initials, and unit synchronization.
+ * DRIVER-DASHBOARD.JS — Real-time telemetry, 3-way crisis triggers, 
+ * organization name resolution, avatar initials, and unit synchronization.
  */
 
 import { supabase, getUserProfile, formatDate, escapeHtml } from '../config.js';
@@ -59,8 +59,15 @@ export async function initDashboard() {
   }
 
   initMap();
-  setupSosButton('sos-btn', 'sos-progress', 'sos-label', 'sos', 'Road Emergency SOS');
-  setupSosButton('health-sos-btn', 'health-sos-progress', 'health-sos-label', 'health', 'Medical Distress');
+
+  // 1. Road Emergency SOS (critical)
+  setupSosButton('sos-btn', 'sos-progress', 'sos-label', 'road_accident', 'Road Emergency SOS', 'critical');
+
+  // 2. Health / Medical SOS (high)
+  setupSosButton('health-sos-btn', 'health-sos-progress', 'health-sos-label', 'medical', 'Medical Distress', 'high');
+
+  // 3. Repair / Breakdown SOS (medium)
+  setupSosButton('repair-sos-btn', 'repair-sos-progress', 'repair-sos-label', 'breakdown', 'Mechanical Breakdown', 'medium');
   
   await loadAssignedTrip();
   await loadBroadcastFeed();
@@ -147,7 +154,7 @@ async function loadAssignedTrip() {
     if (plateCard) plateCard.textContent = plateText;
     if (sidebarBus) sidebarBus.textContent = `BUS ${plateText} · ACTIVE`;
   } else {
-    // Attempt fallback to directly assigned vehicle
+    // Fallback check on vehicles table
     const { data: fallbackVehicle } = await supabase
       .from('vehicles')
       .select('id, plate_number')
@@ -193,12 +200,13 @@ async function loadAssignedTrip() {
   }
 }
 
-function setupSosButton(btnId, progressId, labelId, type, title) {
+function setupSosButton(btnId, progressId, labelId, type, title, severity = 'high') {
   const btn = document.getElementById(btnId);
   const progress = document.getElementById(progressId);
   const label = document.getElementById(labelId);
   if (!btn) return;
 
+  const originalText = label ? label.textContent : '';
   let timer = null;
   let startTime = 0;
 
@@ -211,7 +219,7 @@ function setupSosButton(btnId, progressId, labelId, type, title) {
       progress.style.width = `${Math.min((elapsed / 5000) * 100, 100)}%`;
       if (elapsed >= 5000) {
         clearInterval(timer);
-        fireSOS(type, title, btn, label);
+        fireSOS(type, title, btn, label, originalText, severity);
         progress.style.width = '0%';
         btn.classList.remove('holding');
       }
@@ -231,29 +239,65 @@ function setupSosButton(btnId, progressId, labelId, type, title) {
   btn.addEventListener('touchend', clearHold);
 }
 
-async function fireSOS(type, title, btn, label) {
-  navigator.geolocation.getCurrentPosition(async (pos) => {
-    const { latitude, longitude } = pos.coords;
+async function fireSOS(type, title, btn, label, originalText, severity = 'high') {
+  if (!navigator.geolocation) {
+    showToast('Geolocation is not supported on this device.', 'error');
+    return;
+  }
 
-    await supabase.from('incidents').insert({
-      organization_id: profile.organization_id,
-      driver_id: profile.id,
-      vehicle_id: assignedVehicle?.id || null,
-      trip_id: activeTrip?.id || null,
-      incident_type: type,
-      severity: type === 'sos' ? 'critical' : 'high',
-      latitude,
-      longitude,
-      status: 'open',
-      description: `In-cab trigger: Driver dispatched ${title}.`
-    });
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const { latitude, longitude } = pos.coords;
 
-    label.textContent = 'ALERT SENT';
-    showToast(`${title} transmitted to Fleet Control.`, 'success', 5000);
-    setTimeout(() => {
-      label.textContent = type === 'sos' ? 'HOLD · ROAD SOS' : 'HOLD · HEALTH SOS';
-    }, 4000);
-  }, () => showToast('GPS access required for SOS alert.', 'error'), { enableHighAccuracy: true });
+      const { error } = await supabase.from('incidents').insert({
+        organization_id: profile.organization_id,
+        driver_id: profile.id,
+        vehicle_id: assignedVehicle?.id || null,
+        trip_id: activeTrip?.id || null,
+        incident_type: type,
+        severity: severity,
+        latitude,
+        longitude,
+        status: 'open',
+        description: `In-cab trigger: Driver dispatched ${title}.`
+      });
+
+      if (error) {
+        showToast(`Failed to transmit SOS: ${error.message}`, 'error');
+        return;
+      }
+
+      if (label) label.textContent = 'ALERT SENT';
+      showToast(`${title} transmitted to Fleet Control.`, 'success', 5000);
+      setTimeout(() => {
+        if (label) label.textContent = originalText;
+      }, 4000);
+    },
+    (err) => {
+      showToast(`GPS error: ${err.message}. Enabling standard location fallback.`, 'warning');
+      
+      // Fallback emergency insert without precise GPS
+      supabase.from('incidents').insert({
+        organization_id: profile.organization_id,
+        driver_id: profile.id,
+        vehicle_id: assignedVehicle?.id || null,
+        trip_id: activeTrip?.id || null,
+        incident_type: type,
+        severity: severity,
+        status: 'open',
+        description: `In-cab trigger: Driver dispatched ${title} (GPS offline).`
+      }).then(({ error }) => {
+        if (!error) {
+          if (label) label.textContent = 'ALERT SENT';
+          showToast(`${title} transmitted to Fleet Control.`, 'success', 5000);
+          setTimeout(() => {
+            if (label) label.textContent = originalText;
+          }, 4000);
+        }
+      });
+    },
+    { enableHighAccuracy: true, timeout: 8000 }
+  );
 }
 
 async function loadBroadcastFeed() {
