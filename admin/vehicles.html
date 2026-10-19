@@ -41,6 +41,8 @@
 </head>
 <body class="bg-slate-50 text-slate-900 font-sans h-screen overflow-hidden flex flex-col antialiased" data-fc-guard="admin">
 
+  <div id="fc-toast-host" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none"></div>
+
   <!-- Mobile Backdrop Overlay -->
   <div id="mobile-overlay" class="fixed inset-0 bg-slate-900/60 z-40 hidden md:hidden backdrop-blur-sm transition-opacity"></div>
 
@@ -51,7 +53,7 @@
         <i class="bi bi-list text-2xl"></i>
       </button>
       <div class="flex items-center gap-2 sm:gap-3">
-        <img alt="FleetCore Logo" class="h-7 sm:h-8 w-auto object-contain" src="../assets/images/logo.png"/>
+        <img alt="FleetCore Logo" class="h-7 sm:h-8 w-auto object-contain" src="../assets/images/logo.png" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 40 40\'%3E%3Crect width=\'40\' height=\'40\' rx=\'8\' fill=\'%230B2545\'/%3E%3Ctext x=\'20\' y=\'25\' font-size=\'14\' font-weight=\'bold\' fill=\'%2300A896\' text-anchor=\'middle\'%3EFC%3C/text%3E%3C/svg%3E'"/>
         <span class="font-display font-black text-lg sm:text-xl tracking-tight text-brand-navy">FLEET<span class="text-teal-600">CORE</span></span>
       </div>
     </div>
@@ -84,7 +86,7 @@
   <!-- Main Container -->
   <div class="flex flex-1 overflow-hidden relative">
     
-    <!-- Side Navigation Bar (Responsive Drawer on Mobile) -->
+    <!-- Side Navigation Bar -->
     <aside id="sidebar" class="bg-white border-r border-border-light w-64 flex flex-col h-full p-4 gap-1 z-50 md:z-20 shrink-0 overflow-y-auto transition-transform duration-200 ease-in-out -translate-x-full md:translate-x-0 fixed md:relative top-0 bottom-0 left-0">
       
       <!-- Organization Title Pill -->
@@ -154,7 +156,7 @@
         <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
           <div>
             <h1 class="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Vehicles Registry</h1>
-            <p class="text-xs sm:text-sm text-slate-500 mt-0.5">Manage fleet units, driver assignments, and document compliance.</p>
+            <p class="text-xs sm:text-sm text-slate-500 mt-0.5">Manage fleet units, driver assignments, SinoTrack hardware, and compliance.</p>
           </div>
           <div class="flex items-center gap-2">
             <button type="button" onclick="loadVehicles()" class="px-3.5 py-2 border border-slate-200 bg-white rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition shadow-sm flex items-center gap-1.5">
@@ -168,7 +170,7 @@
         <div class="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 flex flex-col sm:flex-row gap-3 items-center justify-between shadow-sm">
           <div class="relative w-full sm:max-w-md flex-1">
             <i class="bi bi-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
-            <input class="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 transition" id="vehicle-search" placeholder="Search by plate number, make, model, or driver..." type="text"/>
+            <input class="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 transition" id="vehicle-search" placeholder="Search by plate number, make, model, driver, or IMEI..." type="text"/>
           </div>
           
           <div class="flex items-center gap-1.5 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
@@ -182,18 +184,19 @@
         <!-- Vehicles Data Table Container -->
         <div class="bg-white border border-slate-200/80 rounded-2xl overflow-hidden shadow-sm flex flex-col">
           <div class="overflow-x-auto">
-            <table class="w-full text-left border-collapse">
+            <table class="w-full text-left border-collapse min-w-[760px]">
               <thead>
                 <tr class="border-b border-slate-100 bg-slate-50/75">
                   <th class="py-3 px-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Vehicle Details</th>
                   <th class="py-3 px-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>
                   <th class="py-3 px-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Assigned Driver</th>
+                  <th class="py-3 px-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Telemetry Source</th>
                   <th class="py-3 px-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Compliance Status</th>
                   <th class="py-3 px-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Actions</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100 text-xs" id="vehicles-tbody">
-                <tr><td colspan="5" class="py-12 text-center text-slate-400 font-medium">Fetching fleet vehicles...</td></tr>
+                <tr><td colspan="6" class="py-12 text-center text-slate-400 font-medium">Fetching fleet vehicles...</td></tr>
               </tbody>
             </table>
           </div>
@@ -210,7 +213,8 @@
 
   <!-- Add / Edit Vehicle Modal -->
   <div class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" id="vehicle-modal">
-    <div class="relative bg-white rounded-3xl border border-slate-100 shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 sm:p-7 animate-in fade-in duration-200">
+    <div class="relative bg-white rounded-3xl border border-slate-100 shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto p-6 sm:p-7 animate-in fade-in duration-200">
+      
       <div class="flex items-center justify-between pb-4 border-b border-slate-100 mb-4 sticky top-0 bg-white z-10">
         <div class="flex items-center gap-2.5">
           <div class="p-2 bg-blue-50 text-blue-600 rounded-xl">
@@ -218,7 +222,7 @@
           </div>
           <div>
             <h3 class="font-display text-lg font-bold text-slate-900" id="vehicle-modal-title">Register Vehicle</h3>
-            <p class="text-xs text-slate-500">Configure vehicle telematics and specifications.</p>
+            <p class="text-xs text-slate-500">Configure vehicle specifications and GPS telematics.</p>
           </div>
         </div>
         <button class="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition" id="vehicle-modal-close" type="button">
@@ -228,37 +232,50 @@
 
       <form class="flex flex-col gap-4" id="vehicle-form">
         <div class="grid grid-cols-2 gap-3.5">
+          
+          <!-- Vehicle Friendly Label -->
+          <div class="col-span-2">
+            <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Vehicle Name / Label</label>
+            <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-name" placeholder="e.g. Bus 01 - Main Route / Haulage Unit A" type="text"/>
+          </div>
+
           <div class="col-span-2">
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Plate Number <span class="text-teal-600">*</span></label>
-            <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs uppercase font-bold tracking-wider focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-plate" placeholder="LND-234-XY" required="" type="text"/>
+            <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs uppercase font-bold tracking-wider focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-plate" placeholder="e.g. KDL-204-TR" required="" type="text"/>
           </div>
+
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Make</label>
-            <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-make" placeholder="Mercedes / Mack" type="text"/>
+            <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-make" placeholder="Mercedes / Toyota" type="text"/>
           </div>
+
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Model</label>
-            <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-model" placeholder="Actros / Anthem" type="text"/>
+            <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-model" placeholder="Fleet Bus / Actros" type="text"/>
           </div>
+
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Year</label>
             <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-year" max="2030" min="1980" placeholder="2024" type="number"/>
           </div>
+
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Type</label>
             <select class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 font-medium" id="vehicle-type">
+              <option value="bus">Staff / Transit Bus</option>
               <option value="truck">Truck / Haulage</option>
               <option value="van">Delivery Van</option>
-              <option value="bus">Staff / Transit Bus</option>
               <option value="trailer">Heavy Trailer</option>
               <option value="pickup">Pickup</option>
               <option value="other">Other</option>
             </select>
           </div>
+
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Capacity (kg)</label>
             <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-capacity" min="0" placeholder="5000" type="number"/>
           </div>
+
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Operational Status</label>
             <select class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 font-medium" id="vehicle-status">
@@ -268,16 +285,64 @@
               <option value="inactive">Inactive / Decommissioned</option>
             </select>
           </div>
+
           <div class="col-span-2">
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Assigned Primary Driver</label>
             <select class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 font-medium" id="vehicle-driver-select">
               <option value="">Unassigned</option>
             </select>
           </div>
+
+          <!-- TELEMETRY & HARDWARE TRACKER SECTION -->
+          <div class="col-span-2 pt-3 border-t border-slate-100">
+            <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              GPS Telematics & Tracker Source
+            </label>
+            
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+              <label class="flex items-center gap-2.5 p-2.5 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 transition" id="label-source-driver">
+                <input type="radio" name="tracking_source" id="source-driver" value="driver_app" class="text-teal-600 focus:ring-teal-500">
+                <div>
+                  <span class="text-xs font-bold text-slate-800 block">Driver Mobile App</span>
+                  <span class="text-[10px] text-slate-400">Streams from driver phone</span>
+                </div>
+              </label>
+
+              <label class="flex items-center gap-2.5 p-2.5 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 transition" id="label-source-hardware">
+                <input type="radio" name="tracking_source" id="source-hardware" value="hardware_gps" checked class="text-teal-600 focus:ring-teal-500">
+                <div>
+                  <span class="text-xs font-bold text-slate-800 block">SinoTrack / Hardware GPS</span>
+                  <span class="text-[10px] text-slate-400">ST-904L, ST-901, ST-905</span>
+                </div>
+              </label>
+            </div>
+
+            <!-- Tracker IMEI Input Container -->
+            <div id="imei-field-container">
+              <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Tracker Device ID / IMEI <span id="imei-required-star" class="text-teal-600 hidden">*</span>
+              </label>
+              <div class="relative">
+                <input 
+                  type="text" 
+                  id="vehicle-tracker-imei" 
+                  placeholder="e.g. 7026176528 (Device sticker / IMEI)" 
+                  maxlength="24"
+                  class="w-full pl-3 pr-10 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs font-bold tracking-wider text-slate-800 focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20"
+                />
+                <div class="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-400 text-xs">
+                  <i class="bi bi-broadcast"></i>
+                </div>
+              </div>
+              <p class="text-[10px] text-slate-400 mt-1">Unique 10-15 digit identifier printed on your SinoTrack tracker.</p>
+            </div>
+          </div>
+
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Roadworthiness Expiry</label>
             <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-roadworthiness" type="date"/>
           </div>
+
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Insurance Expiry</label>
             <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="vehicle-insurance" type="date"/>
@@ -299,7 +364,6 @@
   <script src="../js/modules/admin-vehicles.js" type="module"></script>
 
   <script>
-    // Responsive Mobile Menu Handling
     const sidebarToggle = document.getElementById('sidebar-toggle');
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('mobile-overlay');

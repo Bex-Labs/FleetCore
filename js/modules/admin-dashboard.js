@@ -7,6 +7,7 @@ import { supabase, getUserProfile, formatNaira, timeAgo, escapeHtml } from '../c
 
 let leafletMap = null;
 let leafletMarkers = {};
+let vehicleMetaCache = {}; // Cache vehicle info (plate_number, model, name)
 let currentOrgId = null;
 
 // Initialize on page load
@@ -15,7 +16,6 @@ if (document.getElementById('kpi-active-vehicles')) {
 }
 
 async function initDashboard() {
-  // Ensure Map is initialized right away regardless of vehicle count
   initLeafletMap();
 
   const profile = await getUserProfile();
@@ -32,7 +32,7 @@ async function initDashboard() {
     headerAvatar.textContent = initials;
   }
 
-  // Fetch and display the true Organization / Company Name from the Database
+  // Fetch and display the true Organization / Company Name
   if (currentOrgId) {
     const { data: org, error } = await supabase
       .from('organizations')
@@ -56,24 +56,23 @@ async function initDashboard() {
 }
 
 /**
- * Initialize persistent Leaflet Map Canvas (Default to Nigeria / West Africa Center)
+ * Initialize persistent Leaflet Map Canvas
  */
 function initLeafletMap() {
   const mapElement = document.getElementById('fleet-leaflet-map');
   if (!mapElement || leafletMap) return;
-
   if (typeof L === 'undefined') return;
 
+  // Default centered near Kaduna / Central Nigeria corridor
   leafletMap = L.map('fleet-leaflet-map', { 
     zoomControl: true, 
     attributionControl: false 
-  }).setView([9.0820, 8.6753], 6); // Default geographic center
+  }).setView([10.49046, 7.46114], 13);
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { 
     maxZoom: 19 
   }).addTo(leafletMap);
 
-  // Invalidate size once rendered to ensure smooth tiles on mobile viewports
   setTimeout(() => {
     if (leafletMap) leafletMap.invalidateSize();
   }, 300);
@@ -117,7 +116,6 @@ async function loadKpis(orgId) {
   setKpi('kpi-incidents', openIncidents);
   setKpi('kpi-fuel-spend', formatNaira(fuelSpend));
 
-  // Contextual Totals
   document.querySelectorAll('[data-kpi-trend]').forEach(el => {
     const type = el.getAttribute('data-kpi-trend');
     if (type === 'vehicles') el.textContent = `${vehicles.count ?? (vehicles.data || []).length} total units`;
@@ -134,15 +132,42 @@ function setKpi(id, value) {
 }
 
 /**
+ * Custom styling for Leaflet bus markers
+ */
+function createBusMarkerIcon(isActive) {
+  return L.divIcon({
+    className: 'custom-bus-pin',
+    html: `
+      <div class="relative flex items-center justify-center">
+        ${isActive ? '<span class="animate-ping absolute inline-flex h-7 w-7 rounded-full bg-teal-400 opacity-60"></span>' : ''}
+        <div class="w-8 h-8 rounded-xl ${isActive ? 'bg-teal-600' : 'bg-slate-600'} text-white shadow-lg border-2 border-white flex items-center justify-center text-sm">
+          <i class="bi bi-truck"></i>
+        </div>
+      </div>
+    `,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+    popupAnchor: [0, -18]
+  });
+}
+
+/**
  * Load Vehicle Coordinates onto the Active Map
  */
 async function loadVehicleLocations(orgId) {
   if (!orgId || !leafletMap) return;
 
-  const { data: vehicles } = await supabase.from('vehicles').select('id, plate_number, model').eq('organization_id', orgId);
+  // 1. Fetch vehicles with tracker metadata
+  const { data: vehicles } = await supabase
+    .from('vehicles')
+    .select('id, name, plate_number, model, tracker_imei')
+    .eq('organization_id', orgId);
+
+  (vehicles || []).forEach(v => {
+    vehicleMetaCache[v.id] = v;
+  });
+
   const vehicleIds = (vehicles || []).map(v => v.id);
-  const vehicleInfoById = {};
-  (vehicles || []).forEach(v => { vehicleInfoById[v.id] = v; });
 
   let locations = [];
   if (vehicleIds.length) {
@@ -166,22 +191,35 @@ async function loadVehicleLocations(orgId) {
 
   const bounds = [];
   locations.forEach(loc => {
-    const vInfo = vehicleInfoById[loc.vehicle_id] || { plate_number: 'Vehicle', model: '' };
+    const vInfo = vehicleMetaCache[loc.vehicle_id] || { 
+      plate_number: 'Vehicle', 
+      model: 'Fleet Unit',
+      name: 'Active Bus'
+    };
     
-    const marker = L.marker([loc.lat, loc.lng]).addTo(leafletMap);
+    const marker = L.marker([loc.lat, loc.lng], {
+      icon: createBusMarkerIcon(loc.is_active)
+    }).addTo(leafletMap);
+
     marker.bindPopup(`
       <div class="font-sans text-xs p-1">
-        <strong class="font-bold text-slate-900">${vInfo.plate_number}</strong>
-        <div class="text-[11px] text-slate-500">${vInfo.model}</div>
-        <div class="mt-1 text-teal-600 font-bold">Speed: ${loc.speed || 0} km/h</div>
+        <div class="font-bold text-slate-900 text-sm">${escapeHtml(vInfo.plate_number)}</div>
+        <div class="text-[11px] font-semibold text-slate-600">${escapeHtml(vInfo.name || vInfo.model)}</div>
+        <div class="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between gap-3">
+          <span class="text-teal-600 font-bold"><i class="bi bi-speedometer2"></i> ${loc.speed || 0} km/h</span>
+          <span class="text-[10px] text-slate-400">${timeAgo(loc.last_updated)}</span>
+        </div>
       </div>
     `);
+
     leafletMarkers[loc.vehicle_id] = marker;
     bounds.push([loc.lat, loc.lng]);
   });
 
-  if (bounds.length > 0) {
-    leafletMap.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+  if (bounds.length === 1) {
+    leafletMap.setView(bounds[0], 15);
+  } else if (bounds.length > 1) {
+    leafletMap.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
   }
 }
 
@@ -201,6 +239,85 @@ function updateMapHeaderBadge(count) {
     if (pulse) pulse.className = "w-2 h-2 rounded-full bg-slate-400";
     text.textContent = `Radar Standby (0 Active Units)`;
   }
+}
+
+/**
+ * Setup Realtime Subscriptions for GPS Location, Trips, and Incidents
+ */
+function setupRealtimeSubscriptions(orgId) {
+  if (!orgId) return;
+
+  supabase.channel(`fleet-dashboard-realtime-${orgId}`)
+    // Listen for GPS Telematics Coordinate Updates
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_locations' }, async (payload) => {
+      const loc = payload.new;
+      if (!loc) return;
+
+      // Ensure vehicle meta is loaded
+      if (!vehicleMetaCache[loc.vehicle_id]) {
+        const { data: v } = await supabase
+          .from('vehicles')
+          .select('id, name, plate_number, model')
+          .eq('id', loc.vehicle_id)
+          .maybeSingle();
+        if (v) vehicleMetaCache[v.id] = v;
+      }
+
+      const vInfo = vehicleMetaCache[loc.vehicle_id] || { 
+        plate_number: 'Vehicle', 
+        name: 'Fleet Bus',
+        model: 'Unit' 
+      };
+
+      if (!loc.is_active) {
+        if (leafletMarkers[loc.vehicle_id]) {
+          leafletMarkers[loc.vehicle_id].remove();
+          delete leafletMarkers[loc.vehicle_id];
+        }
+      } else if (leafletMap) {
+        const popupContent = `
+          <div class="font-sans text-xs p-1">
+            <div class="font-bold text-slate-900 text-sm">${escapeHtml(vInfo.plate_number)}</div>
+            <div class="text-[11px] font-semibold text-slate-600">${escapeHtml(vInfo.name || vInfo.model)}</div>
+            <div class="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between gap-3">
+              <span class="text-teal-600 font-bold"><i class="bi bi-speedometer2"></i> ${loc.speed || 0} km/h</span>
+              <span class="text-[10px] text-slate-400">${timeAgo(loc.last_updated)}</span>
+            </div>
+          </div>
+        `;
+
+        if (leafletMarkers[loc.vehicle_id]) {
+          leafletMarkers[loc.vehicle_id].setLatLng([loc.lat, loc.lng]);
+          leafletMarkers[loc.vehicle_id].setPopupContent(popupContent);
+        } else {
+          const marker = L.marker([loc.lat, loc.lng], {
+            icon: createBusMarkerIcon(true)
+          }).addTo(leafletMap);
+          marker.bindPopup(popupContent);
+          leafletMarkers[loc.vehicle_id] = marker;
+        }
+      }
+      updateMapHeaderBadge(Object.keys(leafletMarkers).length);
+    })
+    // Listen for Trips Started / Finished
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'trips', filter: `organization_id=eq.${orgId}` }, (payload) => {
+      const trip = payload.new;
+      if (trip && payload.eventType === 'INSERT') {
+        if (window.showToast) window.showToast(`New trip initiated: ${trip.origin || 'Base'} → ${trip.destination || 'Destination'}`, 'info');
+      }
+      loadKpis(orgId);
+      loadActivityFeed(orgId);
+    })
+    // Listen for Incidents
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'incidents', filter: `organization_id=eq.${orgId}` }, (payload) => {
+      const inc = payload.new;
+      if (inc && window.showToast) {
+        window.showToast(`New Incident Alert: ${inc.incident_type || 'Issue'} reported!`, 'warning');
+      }
+      loadKpis(orgId);
+      loadActivityFeed(orgId);
+    })
+    .subscribe();
 }
 
 /**
@@ -276,55 +393,6 @@ async function loadActivityFeed(orgId) {
         <p class="text-[11px] text-slate-500 truncate mt-0.5">${item.detail}</p>
       </div>
     </li>`).join('');
-}
-
-/**
- * Setup Realtime Subscriptions for GPS Location, Trips, and Incidents
- */
-function setupRealtimeSubscriptions(orgId) {
-  if (!orgId) return;
-
-  supabase.channel(`fleet-dashboard-realtime-${orgId}`)
-    // Listen for GPS Telematics Coordinate Updates
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_locations' }, (payload) => {
-      const loc = payload.new;
-      if (!loc) return;
-
-      if (!loc.is_active) {
-        if (leafletMarkers[loc.vehicle_id]) {
-          leafletMarkers[loc.vehicle_id].remove();
-          delete leafletMarkers[loc.vehicle_id];
-        }
-      } else if (leafletMap) {
-        if (leafletMarkers[loc.vehicle_id]) {
-          leafletMarkers[loc.vehicle_id].setLatLng([loc.lat, loc.lng]);
-        } else {
-          const marker = L.marker([loc.lat, loc.lng]).addTo(leafletMap);
-          marker.bindPopup(`<strong>Vehicle Unit</strong><br/>Speed: ${loc.speed || 0} km/h`);
-          leafletMarkers[loc.vehicle_id] = marker;
-        }
-      }
-      updateMapHeaderBadge(Object.keys(leafletMarkers).length);
-    })
-    // Listen for Trips Started / Finished
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'trips', filter: `organization_id=eq.${orgId}` }, (payload) => {
-      const trip = payload.new;
-      if (trip && payload.eventType === 'INSERT') {
-        if (window.showToast) window.showToast(`New trip initiated: ${trip.origin || 'Base'} → ${trip.destination || 'Destination'}`, 'info');
-      }
-      loadKpis(orgId);
-      loadActivityFeed(orgId);
-    })
-    // Listen for Incidents
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'incidents', filter: `organization_id=eq.${orgId}` }, (payload) => {
-      const inc = payload.new;
-      if (inc && window.showToast) {
-        window.showToast(`New Incident Alert: ${inc.incident_type || 'Issue'} reported!`, 'warning');
-      }
-      loadKpis(orgId);
-      loadActivityFeed(orgId);
-    })
-    .subscribe();
 }
 
 /**

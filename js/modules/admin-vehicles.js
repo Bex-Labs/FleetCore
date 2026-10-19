@@ -1,6 +1,6 @@
 /**
  * ADMIN-VEHICLES.JS — Real-time vehicle registry, compliance tracking,
- * and driver assignments for the FleetCore Company Admin portal.
+ * SinoTrack telematics hardware mapping, and driver assignments.
  */
 
 import { supabase, getUserProfile, formatDate, daysUntil, escapeHtml, avatarDataUri, statusBadge } from '../config.js';
@@ -53,6 +53,7 @@ async function init() {
 
   await loadDrivers();
   await loadVehicles();
+  setupVehiclesRealtime();
 
   // Search input event
   document.getElementById('vehicle-search')?.addEventListener('input', (e) => {
@@ -78,7 +79,31 @@ async function init() {
   document.getElementById('vehicle-cancel-btn')?.addEventListener('click', closeModal);
   document.getElementById('vehicle-form')?.addEventListener('submit', onSubmit);
 
+  // Radio toggle for hardware tracking
+  document.querySelectorAll('input[name="tracking_source"]').forEach(radio => {
+    radio.addEventListener('change', (e) => updateTrackingUi(e.target.value));
+  });
+
   tbody.addEventListener('click', onTableClick);
+}
+
+function updateTrackingUi(source) {
+  const imeiInput = document.getElementById('vehicle-tracker-imei');
+  const imeiStar = document.getElementById('imei-required-star');
+  const labelDriver = document.getElementById('label-source-driver');
+  const labelHardware = document.getElementById('label-source-hardware');
+
+  if (source === 'hardware_gps') {
+    imeiStar?.classList.remove('hidden');
+    imeiInput?.setAttribute('placeholder', 'e.g. 7026176528 (SinoTrack ST-904L IMEI)');
+    labelHardware?.classList.add('border-teal-500', 'bg-teal-50/40');
+    labelDriver?.classList.remove('border-teal-500', 'bg-teal-50/40');
+  } else {
+    imeiStar?.classList.add('hidden');
+    imeiInput?.setAttribute('placeholder', 'Optional IMEI if available');
+    labelDriver?.classList.add('border-teal-500', 'bg-teal-50/40');
+    labelHardware?.classList.remove('border-teal-500', 'bg-teal-50/40');
+  }
 }
 
 async function loadDrivers() {
@@ -99,22 +124,41 @@ async function loadDrivers() {
 }
 
 window.loadVehicles = async function() {
-  tbody.innerHTML = `<tr><td colspan="5" class="py-12 text-center text-slate-400 font-medium">Fetching fleet vehicles...</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="6" class="py-12 text-center text-slate-400 font-medium">Fetching fleet vehicles...</td></tr>`;
   
+  // Safe fetch without strict profile relation lock
   const { data, error } = await supabase
     .from('vehicles')
-    .select('*, assigned_driver:profiles(id, full_name)')
+    .select('*')
     .eq('organization_id', orgId)
     .order('created_at', { ascending: false });
 
   if (error) {
-    tbody.innerHTML = `<tr><td colspan="5" class="py-12 text-center text-rose-500 font-medium">Failed to load vehicles: ${escapeHtml(error.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="py-12 text-center text-rose-500 font-medium">Failed to load vehicles: ${escapeHtml(error.message)}</td></tr>`;
     return;
   }
   
-  vehicles = data || [];
+  // Map assigned driver names from driver cache
+  const driverMap = {};
+  drivers.forEach(d => { driverMap[d.id] = d; });
+
+  vehicles = (data || []).map(v => ({
+    ...v,
+    assigned_driver: v.assigned_driver_id ? driverMap[v.assigned_driver_id] : null
+  }));
+
   render();
 };
+
+function setupVehiclesRealtime() {
+  if (!orgId) return;
+
+  supabase.channel(`vehicles-registry-${orgId}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles', filter: `organization_id=eq.${orgId}` }, () => {
+      window.loadVehicles();
+    })
+    .subscribe();
+}
 
 function render() {
   updateCounts();
@@ -124,8 +168,10 @@ function render() {
   if (searchTerm) {
     list = list.filter(v =>
       (v.plate_number || '').toLowerCase().includes(searchTerm) ||
+      (v.name || '').toLowerCase().includes(searchTerm) ||
       (v.make || '').toLowerCase().includes(searchTerm) ||
       (v.model || '').toLowerCase().includes(searchTerm) ||
+      (v.tracker_imei || '').toLowerCase().includes(searchTerm) ||
       (v.assigned_driver?.full_name || '').toLowerCase().includes(searchTerm)
     );
   }
@@ -162,7 +208,7 @@ function updateCounts() {
 function emptyStateRow(title, sub) {
   return `
     <tr>
-      <td colspan="5" class="py-16 text-center">
+      <td colspan="6" class="py-16 text-center">
         <div class="flex flex-col items-center gap-2 text-slate-400 max-w-sm mx-auto">
           <i class="bi bi-truck text-3xl text-slate-300"></i>
           <span class="text-xs font-bold text-slate-700">${escapeHtml(title)}</span>
@@ -210,6 +256,25 @@ function rowHtml(v) {
       </div>`
     : `<span class="text-slate-400 italic text-[11px]">Unassigned</span>`;
 
+  // Telemetry Source Badge
+  let telemetryCell = `
+    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+      <i class="bi bi-phone"></i> Driver App
+    </span>`;
+  
+  if (v.tracking_source === 'hardware_gps' || v.tracker_imei) {
+    telemetryCell = `
+      <div class="flex flex-col">
+        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-xl text-[11px] font-bold bg-teal-50 text-teal-700 border border-teal-200/80 w-fit">
+          <i class="bi bi-broadcast text-teal-600"></i> SinoTrack GPS
+        </span>
+        <span class="font-mono text-[10px] text-slate-500 mt-0.5 font-bold pl-0.5">IMEI: ${escapeHtml(v.tracker_imei || 'Not Set')}</span>
+      </div>`;
+  }
+
+  const displayName = v.name ? `<div class="text-[11px] font-bold text-slate-800">${escapeHtml(v.name)}</div>` : '';
+  const vehicleSub = [v.make, v.model].filter(Boolean).join(' ') || v.vehicle_type || 'Fleet Unit';
+
   return `
     <tr class="hover:bg-slate-50/75 transition border-b border-slate-100 group" data-id="${v.id}">
       <td class="py-3.5 px-4">
@@ -219,12 +284,14 @@ function rowHtml(v) {
           </div>
           <div>
             <div class="font-mono text-xs text-slate-900 bg-slate-100/80 px-2 py-0.5 rounded-lg border border-slate-200 inline-block font-bold tracking-wider mb-0.5">${escapeHtml(v.plate_number)}</div>
-            <div class="text-slate-400 text-[11px]">${escapeHtml([v.make, v.model].filter(Boolean).join(' ') || v.vehicle_type || 'Unit')} ${v.year ? `(${v.year})` : ''}</div>
+            ${displayName}
+            <div class="text-slate-400 text-[11px]">${escapeHtml(vehicleSub)} ${v.year ? `(${v.year})` : ''}</div>
           </div>
         </div>
       </td>
       <td class="py-3.5 px-4">${statusBadge(v.status, STATUS_MAP)}</td>
       <td class="py-3.5 px-4">${driverCell}</td>
+      <td class="py-3.5 px-4">${telemetryCell}</td>
       <td class="py-3.5 px-4">${expiryCell(v.roadworthiness_expiry)}</td>
       <td class="py-3.5 px-4 text-right">
         <div class="inline-flex items-center gap-1">
@@ -272,6 +339,7 @@ window.openModal = function(vehicle = null) {
   if (!modal) return;
   
   document.getElementById('vehicle-modal-title').textContent = vehicle ? 'Edit Vehicle Specifications' : 'Register Vehicle';
+  document.getElementById('vehicle-name').value = vehicle?.name || '';
   document.getElementById('vehicle-plate').value = vehicle?.plate_number || '';
   document.getElementById('vehicle-make').value = vehicle?.make || '';
   document.getElementById('vehicle-model').value = vehicle?.model || '';
@@ -282,6 +350,15 @@ window.openModal = function(vehicle = null) {
   document.getElementById('vehicle-roadworthiness').value = vehicle?.roadworthiness_expiry || '';
   document.getElementById('vehicle-insurance').value = vehicle?.insurance_expiry || '';
   document.getElementById('vehicle-driver-select').value = vehicle?.assigned_driver_id || '';
+  
+  const trackingSource = vehicle?.tracking_source || (vehicle?.tracker_imei ? 'hardware_gps' : 'driver_app');
+  if (trackingSource === 'hardware_gps') {
+    document.getElementById('source-hardware').checked = true;
+  } else {
+    document.getElementById('source-driver').checked = true;
+  }
+  document.getElementById('vehicle-tracker-imei').value = vehicle?.tracker_imei || '';
+  updateTrackingUi(trackingSource);
   
   modal.classList.remove('hidden');
 };
@@ -299,8 +376,19 @@ async function onSubmit(e) {
   btn.disabled = true; 
   btn.textContent = 'Saving...';
 
+  const tracking_source = document.querySelector('input[name="tracking_source"]:checked')?.value || 'driver_app';
+  const tracker_imei = document.getElementById('vehicle-tracker-imei').value.trim() || null;
+
+  if (tracking_source === 'hardware_gps' && !tracker_imei) {
+    showToast('Please enter the SinoTrack Device ID / IMEI for hardware tracking.', 'error');
+    btn.disabled = false;
+    btn.textContent = original;
+    return;
+  }
+
   const payload = {
     organization_id: orgId,
+    name: document.getElementById('vehicle-name').value.trim() || null,
     plate_number: document.getElementById('vehicle-plate').value.trim().toUpperCase(),
     make: document.getElementById('vehicle-make').value.trim() || null,
     model: document.getElementById('vehicle-model').value.trim() || null,
@@ -311,6 +399,8 @@ async function onSubmit(e) {
     roadworthiness_expiry: document.getElementById('vehicle-roadworthiness').value || null,
     insurance_expiry: document.getElementById('vehicle-insurance').value || null,
     assigned_driver_id: document.getElementById('vehicle-driver-select').value || null,
+    tracking_source,
+    tracker_imei
   };
 
   if (!payload.plate_number) {
@@ -329,7 +419,14 @@ async function onSubmit(e) {
   btn.textContent = original;
 
   if (error) {
-    showToast(error.code === '23505' ? 'A vehicle with this plate number is already registered.' : error.message, 'error');
+    if (error.code === '23505') {
+      const msg = error.message.includes('tracker_imei')
+        ? 'This Tracker IMEI is already assigned to another vehicle.'
+        : 'A vehicle with this plate number is already registered.';
+      showToast(msg, 'error');
+    } else {
+      showToast(error.message, 'error');
+    }
     return;
   }
 
