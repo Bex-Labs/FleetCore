@@ -1,21 +1,25 @@
 /**
- * AUTH.JS — Authentication, Role-Based Routing & Global Session Management
- * FleetCore roles: company_admin | driver | maintenance_officer | account_manager | bex_admin
+ * AUTH.JS — Authentication, Dynamic Role Routing & Multi-Tenant Session Management
+ * Supported roles: super_admin | bex_admin | company_admin | admin | driver | maintenance_officer | account_manager
  */
 
-import { supabase, getUserRole } from './config.js';
+import { supabase, getUserRole, getUserProfile } from './config.js';
 
-const ROLE_REDIRECTS = {
+export const ROLE_REDIRECTS = {
+  super_admin:         '/bex-admin/dashboard.html',
   bex_admin:           '/bex-admin/dashboard.html',
   company_admin:       '/admin/dashboard.html',
+  admin:               '/admin/dashboard.html',
   driver:              '/driver/dashboard.html',
   maintenance_officer: '/maintenance/dashboard.html',
   account_manager:     '/finance/dashboard.html',
 };
 
-const ROLE_NAMES = {
+export const ROLE_NAMES = {
+  super_admin:         'Super Admin (Bex)',
   bex_admin:           'Bex Admin',
   company_admin:       'Company Admin',
+  admin:               'Company Admin',
   driver:              'Driver',
   maintenance_officer: 'Maintenance Officer',
   account_manager:     'Account Manager',
@@ -68,41 +72,94 @@ export function showToast(message, type = 'info', duration = 4000) {
 }
 window.showToast = window.showToast || showToast;
 
-async function resolveActiveTenant() {
-  window.activeTenantId = null;
-  const host = window.location.hostname;
-  if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local')) return;
-  
-  const isHostingPlatform = (
-    host.endsWith('.vercel.app') || host.endsWith('.netlify.app') ||
-    host.endsWith('.pages.dev')  || host.endsWith('.github.io') ||
-    host.endsWith('.onrender.com') || host.endsWith('.railway.app') || host.endsWith('.fly.dev')
-  );
-  if (isHostingPlatform) return;
+/**
+ * Primary Unified Login & Auto-Routing Handler
+ * Validates tenant code, checks profile credentials, and redirects by role.
+ */
+export async function authenticateTenantUser(orgCode, email, password) {
+  const cleanCode = (orgCode || '').trim().toUpperCase();
+  const cleanEmail = (email || '').trim().toLowerCase();
+  const cleanPassword = (password || '').trim();
 
-  const parts = host.split('.');
-  if (parts.length <= 2 || ['www', 'admin', 'app'].includes(parts[0])) return;
-  const subToken = parts[0].toLowerCase().trim();
-  
-  if (!supabase) return;
-  try {
-    const { data: org, error } = await supabase.from('organizations').select('id, name').eq('subdomain', subToken).single();
-    if (!error && org) {
-      window.activeTenantId = org.id;
-      const brandHeader = document.getElementById('login-org-title');
-      if (brandHeader) brandHeader.textContent = org.name;
-    } else if (subToken) {
-      showToast('Unrecognised company domain.', 'error');
-    }
-  } catch (err) {
-    console.warn('Tenant domain resolution error:', err);
+  if (!cleanEmail || !cleanPassword) {
+    throw new Error('Please enter both your email address and password.');
   }
+
+  // 1. Authenticate with Supabase
+  const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+    email: cleanEmail,
+    password: cleanPassword
+  });
+
+  if (authErr) throw authErr;
+
+  const userId = authData.user.id;
+
+  // 2. Fetch User Profile
+  const { data: profile, error: profileErr } = await supabase
+    .from('profiles')
+    .select('id, full_name, role, organization_id, status')
+    .eq('id', userId)
+    .single();
+
+  if (profileErr || !profile) {
+    await supabase.auth.signOut();
+    throw new Error('User profile record not found. Please contact support.');
+  }
+
+  if (profile.status === 'inactive' || profile.status === 'suspended') {
+    await supabase.auth.signOut();
+    throw new Error('Your account is currently inactive. Contact your administrator.');
+  }
+
+  // 3. Platform Super Admin Bypass (No code required, or code "BEX")
+  const isSuperAdmin = profile.role === 'super_admin' || profile.role === 'bex_admin';
+  if (isSuperAdmin) {
+    localStorage.setItem('fc_user_role', 'super_admin');
+    localStorage.removeItem('fc_org_code');
+    window.location.href = rootPath(ROLE_REDIRECTS[profile.role] || '/bex-admin/dashboard.html');
+    return;
+  }
+
+  // 4. Validate Tenant Organization Code for regular organization accounts
+  if (!cleanCode) {
+    await supabase.auth.signOut();
+    throw new Error('Please enter your 3-letter Organization Code (e.g. TCL).');
+  }
+
+  if (!profile.organization_id) {
+    await supabase.auth.signOut();
+    throw new Error('Your account is not assigned to any organization.');
+  }
+
+  const { data: org, error: orgErr } = await supabase
+    .from('organizations')
+    .select('id, name, code')
+    .eq('id', profile.organization_id)
+    .single();
+
+  if (orgErr || !org) {
+    await supabase.auth.signOut();
+    throw new Error('Assigned organization could not be found.');
+  }
+
+  if ((org.code || '').toUpperCase() !== cleanCode) {
+    await supabase.auth.signOut();
+    throw new Error(`Invalid credentials for organization code "${cleanCode}".`);
+  }
+
+  // 5. Cache tenant details in local storage
+  localStorage.setItem('fc_org_code', org.code);
+  localStorage.setItem('fc_org_name', org.name);
+  localStorage.setItem('fc_user_role', profile.role);
+
+  // 6. Auto-route by detected role
+  redirectByRole(profile.role);
 }
+window.authenticateTenantUser = authenticateTenantUser;
 
-// Initialize Auth Watcher
+// Initialize Auth State Watcher
 if (supabase) {
-  resolveActiveTenant();
-
   supabase.auth.onAuthStateChange((event, session) => {
     const authPages = ['index.html', 'forgot-password.html', 'reset-password.html', ''];
     const currentPage = window.location.pathname.split('/').pop();
@@ -113,7 +170,7 @@ if (supabase) {
       window.location.pathname.includes('confirm.html')
     ) return;
 
-    // Do NOT auto-redirect if an explicit login attempt is running strict role validation
+    // Suppress automatic listener redirection if an explicit login attempt is running
     if (event === 'SIGNED_IN' && session && isAuthPage) {
       if (window.fcIsExplicitLogin) return;
       redirectByRole();
@@ -133,19 +190,14 @@ if (supabase) {
   });
 }
 
-export async function redirectByRole() {
-  const role = await getUserRole();
+export async function redirectByRole(passedRole) {
+  const role = passedRole || await getUserRole();
   if (!role) { 
     showToast('Could not determine account role. Please contact support.', 'error'); 
     return; 
   }
   
-  const path = ROLE_REDIRECTS[role];
-  if (!path) { 
-    showToast('Unrecognised role on this account.', 'error'); 
-    return; 
-  }
-  
+  const path = ROLE_REDIRECTS[role] || '/admin/dashboard.html';
   const targetFolder = path.split('/')[1];
   if (window.location.pathname.includes(`/${targetFolder}/`)) return;
   window.location.href = rootPath(path);
@@ -159,11 +211,14 @@ export async function guardRole(expectedFolder) {
     window.location.replace(rootPath('index.html')); 
     return; 
   }
+
+  // Super admins are permitted across all folders
+  if (role === 'super_admin' || role === 'bex_admin') return;
   
   const path = ROLE_REDIRECTS[role];
   const folder = path ? path.split('/')[1] : null;
   if (folder !== expectedFolder) {
-    showToast(`This page is only available to authorized users.`, 'error');
+    showToast('This page is only available to authorized users.', 'error');
     window.location.replace(rootPath(path || 'index.html'));
   }
 }
@@ -235,10 +290,9 @@ export async function performLogout() {
   } catch (err) {
     console.warn('Signout note:', err);
   } finally {
-    // Clear all Supabase auth storage tokens
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
-      if (key && (key.includes('sb-') || key.includes('auth-token') || key.includes('supabase') || key.includes('fleetcore'))) {
+      if (key && (key.includes('sb-') || key.includes('auth-token') || key.includes('supabase') || key.includes('fc_') || key.includes('fleetcore'))) {
         localStorage.removeItem(key);
       }
     }

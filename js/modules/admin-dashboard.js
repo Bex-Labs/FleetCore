@@ -1,14 +1,17 @@
 /**
  * ADMIN-DASHBOARD.JS — Real-time telemetry, live queries, persistent Leaflet map,
- * and fleet broadcast alerts for the FleetCore Company Admin portal.
+ * smooth marker interpolation, 48-hour inactivity stale filter, and fleet alerts.
  */
 
 import { supabase, getUserProfile, formatNaira, timeAgo, escapeHtml } from '../config.js';
 
 let leafletMap = null;
 let leafletMarkers = {};
-let vehicleMetaCache = {}; // Cache vehicle info (plate_number, model, name)
+let markerAnimationFrames = {}; // Track active animation frames per vehicle
+let vehicleMetaCache = {};      // Cache vehicle info (plate_number, model, name)
 let currentOrgId = null;
+
+const STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 Hours in milliseconds
 
 // Initialize on page load
 if (document.getElementById('kpi-active-vehicles')) {
@@ -32,7 +35,7 @@ async function initDashboard() {
     headerAvatar.textContent = initials;
   }
 
-  // Fetch and display the true Organization / Company Name
+  // Fetch and display organization name
   if (currentOrgId) {
     const { data: org, error } = await supabase
       .from('organizations')
@@ -63,11 +66,10 @@ function initLeafletMap() {
   if (!mapElement || leafletMap) return;
   if (typeof L === 'undefined') return;
 
-  // Default centered near Kaduna / Central Nigeria corridor
   leafletMap = L.map('fleet-leaflet-map', { 
     zoomControl: true, 
     attributionControl: false 
-  }).setView([10.49046, 7.46114], 13);
+  }).setView([10.49046, 7.46114], 14);
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { 
     maxZoom: 19 
@@ -152,12 +154,46 @@ function createBusMarkerIcon(isActive) {
 }
 
 /**
+ * Smoothly interpolates marker positions between updates
+ */
+function animateMarker(vehicleId, marker, startLatLng, endLatLng, durationMs = 4500) {
+  if (markerAnimationFrames[vehicleId]) {
+    cancelAnimationFrame(markerAnimationFrames[vehicleId]);
+  }
+
+  if (startLatLng[0] === endLatLng[0] && startLatLng[1] === endLatLng[1]) {
+    marker.setLatLng(endLatLng);
+    return;
+  }
+
+  const startTime = performance.now();
+
+  function step(currentTime) {
+    const elapsed = currentTime - startTime;
+    const progress = Math.min(elapsed / durationMs, 1);
+    const easeOut = 1 - Math.pow(1 - progress, 3);
+
+    const currentLat = startLatLng[0] + (endLatLng[0] - startLatLng[0]) * easeOut;
+    const currentLng = startLatLng[1] + (endLatLng[1] - startLatLng[1]) * easeOut;
+
+    marker.setLatLng([currentLat, currentLng]);
+
+    if (progress < 1) {
+      markerAnimationFrames[vehicleId] = requestAnimationFrame(step);
+    } else {
+      delete markerAnimationFrames[vehicleId];
+    }
+  }
+
+  markerAnimationFrames[vehicleId] = requestAnimationFrame(step);
+}
+
+/**
  * Load Vehicle Coordinates onto the Active Map
  */
 async function loadVehicleLocations(orgId) {
   if (!orgId || !leafletMap) return;
 
-  // 1. Fetch vehicles with tracker metadata
   const { data: vehicles } = await supabase
     .from('vehicles')
     .select('id, name, plate_number, model, tracker_imei')
@@ -169,13 +205,17 @@ async function loadVehicleLocations(orgId) {
 
   const vehicleIds = (vehicles || []).map(v => v.id);
 
+  // Calculate 48-hour cutoff timestamp
+  const cutoff48h = new Date(Date.now() - STALE_THRESHOLD_MS).toISOString();
+
   let locations = [];
   if (vehicleIds.length) {
     const { data } = await supabase
       .from('vehicle_locations')
       .select('*')
       .in('vehicle_id', vehicleIds)
-      .eq('is_active', true);
+      .eq('is_active', true)
+      .gte('last_updated', cutoff48h); // 48-Hour Stale Vehicle Expiry
     locations = data || [];
   }
 
@@ -253,7 +293,22 @@ function setupRealtimeSubscriptions(orgId) {
       const loc = payload.new;
       if (!loc) return;
 
-      // Ensure vehicle meta is loaded
+      // Check if coordinate is older than 48 hours
+      const isStale = loc.last_updated 
+        ? (Date.now() - new Date(loc.last_updated).getTime()) > STALE_THRESHOLD_MS
+        : false;
+
+      // Remove marker if marked inactive or inactive for > 48 hours
+      if (!loc.is_active || isStale) {
+        if (leafletMarkers[loc.vehicle_id]) {
+          leafletMarkers[loc.vehicle_id].remove();
+          delete leafletMarkers[loc.vehicle_id];
+        }
+        updateMapHeaderBadge(Object.keys(leafletMarkers).length);
+        return;
+      }
+
+      // Hydrate metadata cache if missing
       if (!vehicleMetaCache[loc.vehicle_id]) {
         const { data: v } = await supabase
           .from('vehicles')
@@ -269,12 +324,7 @@ function setupRealtimeSubscriptions(orgId) {
         model: 'Unit' 
       };
 
-      if (!loc.is_active) {
-        if (leafletMarkers[loc.vehicle_id]) {
-          leafletMarkers[loc.vehicle_id].remove();
-          delete leafletMarkers[loc.vehicle_id];
-        }
-      } else if (leafletMap) {
+      if (leafletMap) {
         const popupContent = `
           <div class="font-sans text-xs p-1">
             <div class="font-bold text-slate-900 text-sm">${escapeHtml(vInfo.plate_number)}</div>
@@ -287,7 +337,11 @@ function setupRealtimeSubscriptions(orgId) {
         `;
 
         if (leafletMarkers[loc.vehicle_id]) {
-          leafletMarkers[loc.vehicle_id].setLatLng([loc.lat, loc.lng]);
+          const currentPos = leafletMarkers[loc.vehicle_id].getLatLng();
+          const targetPos = [loc.lat, loc.lng];
+          
+          // Animate pin movement smoothly
+          animateMarker(loc.vehicle_id, leafletMarkers[loc.vehicle_id], [currentPos.lat, currentPos.lng], targetPos, 4500);
           leafletMarkers[loc.vehicle_id].setPopupContent(popupContent);
         } else {
           const marker = L.marker([loc.lat, loc.lng], {
