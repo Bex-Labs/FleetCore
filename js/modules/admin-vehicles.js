@@ -3,15 +3,8 @@
  * SinoTrack telematics hardware mapping, and driver assignments.
  */
 
-import { supabase, getUserProfile, formatDate, daysUntil, escapeHtml, avatarDataUri, statusBadge } from '../config.js';
+import { supabase, getUserProfile, formatDate, daysUntil, escapeHtml, avatarDataUri } from '../config.js';
 import { showToast } from '../auth.js';
-
-const STATUS_MAP = {
-  active:     { label: 'Operational', cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200/60' },
-  in_service: { label: 'In Service',  cls: 'bg-amber-50 text-amber-700 border border-amber-200/60' },
-  flagged:    { label: 'Flagged',     cls: 'bg-rose-50 text-rose-700 border border-rose-200/60' },
-  inactive:   { label: 'Inactive',    cls: 'bg-slate-100 text-slate-600 border border-slate-200' },
-};
 
 let orgId = null;
 let vehicles = [];
@@ -51,8 +44,9 @@ async function init() {
     }
   }
 
+  // Load drivers first so the select menu and driver map are ready
   await loadDrivers();
-  await loadVehicles();
+  await window.loadVehicles();
   setupVehiclesRealtime();
 
   // Search input event
@@ -109,7 +103,7 @@ function updateTrackingUi(source) {
 async function loadDrivers() {
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, full_name')
+    .select('id, full_name, phone')
     .eq('organization_id', orgId)
     .eq('role', 'driver')
     .order('full_name');
@@ -126,10 +120,19 @@ async function loadDrivers() {
 window.loadVehicles = async function() {
   tbody.innerHTML = `<tr><td colspan="6" class="py-12 text-center text-slate-400 font-medium">Fetching fleet vehicles...</td></tr>`;
   
-  // Safe fetch without strict profile relation lock
+  // Explicitly join vehicle_locations for real-time ping status
   const { data, error } = await supabase
     .from('vehicles')
-    .select('*')
+    .select(`
+      *,
+      vehicle_locations (
+        lat,
+        lng,
+        speed,
+        is_active,
+        last_updated
+      )
+    `)
     .eq('organization_id', orgId)
     .order('created_at', { ascending: false });
 
@@ -138,14 +141,20 @@ window.loadVehicles = async function() {
     return;
   }
   
-  // Map assigned driver names from driver cache
   const driverMap = {};
   drivers.forEach(d => { driverMap[d.id] = d; });
 
-  vehicles = (data || []).map(v => ({
-    ...v,
-    assigned_driver: v.assigned_driver_id ? driverMap[v.assigned_driver_id] : null
-  }));
+  vehicles = (data || []).map(v => {
+    // Standardize locations array or object
+    const rawLoc = v.vehicle_locations;
+    const loc = Array.isArray(rawLoc) ? (rawLoc[0] || null) : rawLoc;
+
+    return {
+      ...v,
+      location: loc,
+      assigned_driver: v.assigned_driver_id ? driverMap[v.assigned_driver_id] : null
+    };
+  });
 
   render();
 };
@@ -157,14 +166,70 @@ function setupVehiclesRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles', filter: `organization_id=eq.${orgId}` }, () => {
       window.loadVehicles();
     })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_locations' }, () => {
+      window.loadVehicles();
+    })
     .subscribe();
+}
+
+/**
+ * Builds dynamic operational status badge combining administrative
+ * maintenance flags and real-time SinoTrack GPS ping recency.
+ */
+function getCombinedStatusBadge(vehicle) {
+  // 1. Administrative overrides
+  if (vehicle.status === 'in_service') {
+    return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+      <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> In Service
+    </span>`;
+  }
+  if (vehicle.status === 'flagged') {
+    return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+      <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span> Flagged
+    </span>`;
+  }
+  if (vehicle.status === 'inactive') {
+    return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+      <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span> Decommissioned
+    </span>`;
+  }
+
+  // 2. Telemetry ping evaluation
+  const loc = vehicle.location;
+  const lastPingMs = loc?.last_updated ? new Date(loc.last_updated).getTime() : 0;
+  const isStale = !lastPingMs || (Date.now() - lastPingMs) > (48 * 60 * 60 * 1000); // 48-hour cutoff
+
+  if (!loc || !loc.is_active || isStale) {
+    const daysAgo = lastPingMs ? Math.round((Date.now() - lastPingMs) / (1000 * 60 * 60 * 24)) : null;
+    const label = daysAgo ? `Offline (${daysAgo}d ago)` : 'Offline (>48h)';
+    return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500 border border-slate-200" title="No telemetry ping received within 48 hours">
+      <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span> ${label}
+    </span>`;
+  }
+
+  if (Number(loc.speed) > 5) {
+    return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Moving (${Math.round(loc.speed)} km/h)
+    </span>`;
+  }
+
+  return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+    <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Parked (Live)
+  </span>`;
 }
 
 function render() {
   updateCounts();
 
   let list = vehicles;
-  if (activeFilter !== 'all') list = list.filter(v => v.status === activeFilter);
+  if (activeFilter === 'active') {
+    list = list.filter(v => v.status === 'active');
+  } else if (activeFilter === 'in_service') {
+    list = list.filter(v => v.status === 'in_service');
+  } else if (activeFilter === 'flagged') {
+    list = list.filter(v => v.status === 'flagged');
+  }
+
   if (searchTerm) {
     list = list.filter(v =>
       (v.plate_number || '').toLowerCase().includes(searchTerm) ||
@@ -196,7 +261,9 @@ function render() {
 
 function updateCounts() {
   const counts = { all: vehicles.length, active: 0, in_service: 0, flagged: 0 };
-  vehicles.forEach(v => { if (counts[v.status] !== undefined) counts[v.status]++; });
+  vehicles.forEach(v => { 
+    if (counts[v.status] !== undefined) counts[v.status]++; 
+  });
   
   const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = n; };
   set('count-all', counts.all);
@@ -249,14 +316,15 @@ function expiryCell(dateStr) {
 }
 
 function rowHtml(v) {
-  const driverCell = v.assigned_driver
+  const driverName = v.assigned_driver?.full_name;
+  const driverCell = driverName
     ? `<div class="flex items-center gap-2">
-        <img alt="Driver avatar" class="w-6 h-6 rounded-full object-cover border border-slate-200" src="${avatarDataUri(v.assigned_driver.full_name)}"/>
-        <span class="text-slate-800 font-semibold">${escapeHtml(v.assigned_driver.full_name || 'Driver')}</span>
+        <img alt="Driver avatar" class="w-6 h-6 rounded-full object-cover border border-slate-200" src="${avatarDataUri(driverName)}"/>
+        <span class="text-slate-800 font-semibold">${escapeHtml(driverName)}</span>
       </div>`
     : `<span class="text-slate-400 italic text-[11px]">Unassigned</span>`;
 
-  // Telemetry Source Badge
+  // Telemetry Hardware Badge
   let telemetryCell = `
     <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
       <i class="bi bi-phone"></i> Driver App
@@ -289,7 +357,7 @@ function rowHtml(v) {
           </div>
         </div>
       </td>
-      <td class="py-3.5 px-4">${statusBadge(v.status, STATUS_MAP)}</td>
+      <td class="py-3.5 px-4">${getCombinedStatusBadge(v)}</td>
       <td class="py-3.5 px-4">${driverCell}</td>
       <td class="py-3.5 px-4">${telemetryCell}</td>
       <td class="py-3.5 px-4">${expiryCell(v.roadworthiness_expiry)}</td>
