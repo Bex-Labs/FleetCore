@@ -142,16 +142,17 @@ export async function uploadFile(file, folder) {
 
 // ─── Global Leaflet Map Tile Provider ────────────────────────────────────
 /**
- * Fast, reliable Esri World Street Map tiles.
- * Global CDN, zero API key required, no rate-limit blocking or watermarks.
+ * Fast, open OSM Humanitarian edge CDN (osm.fr/hot).
+ * Free, zero API key required, no watermarks, and avoids standard OSM rate limits.
  */
 export function createTileLayer() {
   if (typeof L === 'undefined') {
     console.warn('Leaflet (L) is not loaded on this page.');
     return null;
   }
-  return L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+  return L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
     maxZoom: 19,
-    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, METI, TomTom'
+    subdomains: ['a', 'b'],
+    attribution: '&copy; OpenStreetMap contributors, Tiles style by Humanitarian OpenStreetMap Team'
   });
 }

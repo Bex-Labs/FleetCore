@@ -3,7 +3,7 @@
  * smooth marker interpolation, 48-hour inactivity stale filter, and fleet alerts.
  */
 
-import { supabase, getUserProfile, formatNaira, timeAgo, escapeHtml } from '../config.js';
+import { supabase, getUserProfile, formatNaira, timeAgo, escapeHtml, createTileLayer } from '../config.js?v=4';
 
 let leafletMap = null;
 let leafletMarkers = {};
@@ -71,11 +71,9 @@ function initLeafletMap() {
     attributionControl: false 
   }).setView([10.49046, 7.46114], 14);
 
-  // CartoDB Voyager CDN — global edge caching, prevents OpenStreetMap timeout & rate-limits
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { 
-    maxZoom: 19,
-    subdomains: 'abcd'
-  }).addTo(leafletMap);
+  // Centralized tile provider from config.js
+  const tileLayer = createTileLayer();
+  if (tileLayer) tileLayer.addTo(leafletMap);
 
   setTimeout(() => {
     if (leafletMap) leafletMap.invalidateSize();
