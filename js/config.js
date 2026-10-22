@@ -92,7 +92,7 @@ export function timeAgo(dateStr) {
   const mins = Math.floor(diffMs / 60000);
   if (mins < 1) return 'Just now';
   if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 24);
+  const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   if (days < 30) return `${days}d ago`;
@@ -142,17 +142,16 @@ export async function uploadFile(file, folder) {
 
 // ─── Global Leaflet Map Tile Provider ────────────────────────────────────
 /**
- * Fast, reliable CartoDB Voyager map tiles with edge CDN caching.
- * Resolves OpenStreetMap tile rate limits and connection timeout issues globally.
+ * Fast, reliable Esri World Street Map tiles.
+ * Global CDN, zero API key required, no rate-limit blocking or watermarks.
  */
 export function createTileLayer() {
   if (typeof L === 'undefined') {
     console.warn('Leaflet (L) is not loaded on this page.');
     return null;
   }
-  return L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  return L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
     maxZoom: 19,
-    subdomains: 'abcd',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>'
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, METI, TomTom'
   });
 }
