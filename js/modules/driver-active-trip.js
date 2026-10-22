@@ -1,9 +1,9 @@
 /**
  * DRIVER-ACTIVE-TRIP.JS — Live in-progress navigation, speed telemetry,
- * real-time coordinates broadcast, and post-trip fuel gate[cite: 3].
+ * real-time coordinates broadcast, and post-trip fuel gate.
  */
 
-import { supabase, getUserProfile } from '../config.js';
+import { supabase, getUserProfile, createTileLayer } from '../config.js';
 import { showToast } from '../auth.js';
 
 let navMap = null;
@@ -48,7 +48,8 @@ function initMap() {
   if (typeof L === 'undefined') return;
 
   navMap = L.map('active-nav-map', { zoomControl: false, attributionControl: false }).setView(currentPos, 16);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(navMap);
+  const tileLayer = createTileLayer();
+  if (tileLayer) tileLayer.addTo(navMap);
 
   const icon = L.divIcon({
     className: 'active-nav-pin',

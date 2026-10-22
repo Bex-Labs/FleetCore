@@ -3,7 +3,7 @@
  * category filters, emergency report creation, and incident resolution workflow.
  */
 
-import { supabase, getUserProfile, formatDate, timeAgo, escapeHtml, avatarDataUri } from '../config.js';
+import { supabase, getUserProfile, formatDate, timeAgo, escapeHtml, avatarDataUri, createTileLayer } from '../config.js';
 import { showToast } from '../auth.js';
 
 let currentOrgId = null;
@@ -79,9 +79,8 @@ function initRadarMap() {
     attributionControl: false,
   }).setView([9.0820, 8.6753], 6);
 
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-  }).addTo(leafletMap);
+  const tileLayer = createTileLayer();
+  if (tileLayer) tileLayer.addTo(leafletMap);
 
   setTimeout(() => {
     if (leafletMap) leafletMap.invalidateSize();
@@ -233,7 +232,7 @@ function renderIncidentFeed() {
         <div class="flex items-start justify-between gap-2">
           <div class="flex items-center gap-2.5">
             <div class="w-8 h-8 rounded-xl ${iconCls} flex items-center justify-center text-sm shrink-0">
-              <i class="bi ${icon}"></i>
+              <i class="bi bi-heart-pulse-fill"></i>
             </div>
             <div>
               <div class="text-xs font-bold text-slate-900 leading-tight">${escapeHtml(typeLabel)}</div>

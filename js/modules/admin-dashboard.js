@@ -71,8 +71,10 @@ function initLeafletMap() {
     attributionControl: false 
   }).setView([10.49046, 7.46114], 14);
 
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { 
-    maxZoom: 19 
+  // CartoDB Voyager CDN — global edge caching, prevents OpenStreetMap timeout & rate-limits
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { 
+    maxZoom: 19,
+    subdomains: 'abcd'
   }).addTo(leafletMap);
 
   setTimeout(() => {

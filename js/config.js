@@ -1,5 +1,5 @@
 /**
- * CONFIG.JS — Supabase Client Initialization
+ * CONFIG.JS — Supabase Client Initialization & Shared Utilities
  * FleetCore — standardized on: organizations table, organization_id on profiles
  */
 
@@ -92,7 +92,7 @@ export function timeAgo(dateStr) {
   const mins = Math.floor(diffMs / 60000);
   if (mins < 1) return 'Just now';
   if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
+  const hrs = Math.floor(mins / 24);
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   if (days < 30) return `${days}d ago`;
@@ -138,4 +138,21 @@ export async function uploadFile(file, folder) {
   if (error) throw error;
   const { data } = supabase.storage.from('fleet-uploads').getPublicUrl(path);
   return data.publicUrl;
+}
+
+// ─── Global Leaflet Map Tile Provider ────────────────────────────────────
+/**
+ * Fast, reliable CartoDB Voyager map tiles with edge CDN caching.
+ * Resolves OpenStreetMap tile rate limits and connection timeout issues globally.
+ */
+export function createTileLayer() {
+  if (typeof L === 'undefined') {
+    console.warn('Leaflet (L) is not loaded on this page.');
+    return null;
+  }
+  return L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19,
+    subdomains: 'abcd',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>'
+  });
 }

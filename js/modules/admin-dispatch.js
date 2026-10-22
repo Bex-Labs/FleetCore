@@ -2,7 +2,7 @@
  * ADMIN-DISPATCH.JS — Route Architect & Sequencer (Default) + Dispatch Board.
  */
 
-import { supabase, getUserProfile, formatDate, escapeHtml, avatarDataUri } from '../config.js';
+import { supabase, getUserProfile, formatDate, escapeHtml, avatarDataUri, createTileLayer } from '../config.js';
 import { showToast, performLogout } from '../auth.js';
 
 let orgId = null;
@@ -80,7 +80,8 @@ function initRouteMap() {
   if (architectMap || typeof L === 'undefined') return;
 
   architectMap = L.map('route-map', { zoomControl: true }).setView([9.0820, 8.6753], 12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(architectMap);
+  const tileLayer = createTileLayer();
+  if (tileLayer) tileLayer.addTo(architectMap);
 
   architectMap.on('click', (e) => {
     const { lat, lng } = e.latlng;

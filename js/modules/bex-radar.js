@@ -1,7 +1,7 @@
 /**
  * BEX-RADAR.JS — Global telematics telemetry, cross-tenant unit tracking & Admin Broadcast.
  */
-import { supabase, getUserProfile, escapeHtml } from '../config.js';
+import { supabase, getUserProfile, escapeHtml, createTileLayer } from '../config.js';
 import { showToast, performLogout } from '../auth.js';
 
 let map = null;
@@ -42,7 +42,8 @@ function initLeafletMap() {
   if (map || typeof L === 'undefined') return;
 
   map = L.map('radar-map', { zoomControl: true }).setView([9.0820, 8.6753], 7);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  const tileLayer = createTileLayer();
+  if (tileLayer) tileLayer.addTo(map);
 }
 
 async function loadOrganizations() {
@@ -68,7 +69,6 @@ window.loadRadarFleet = async function() {
   const countBadge = document.getElementById('radar-live-count');
 
   try {
-    // FIX: Explicitly specify foreign key relation (!driver_id and !vehicle_id) to avoid ambiguous embedding error
     const { data, error } = await supabase
       .from('trips')
       .select(`

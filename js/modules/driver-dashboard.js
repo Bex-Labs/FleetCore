@@ -3,7 +3,7 @@
  * organization name resolution, avatar initials, and unit synchronization.
  */
 
-import { supabase, getUserProfile, formatDate, escapeHtml } from '../config.js';
+import { supabase, getUserProfile, formatDate, escapeHtml, createTileLayer } from '../config.js';
 import { showToast, performLogout } from '../auth.js';
 
 let profile = null;
@@ -80,7 +80,8 @@ function initMap() {
   if (map || typeof L === 'undefined') return;
 
   map = L.map('driver-map', { zoomControl: false, attributionControl: false }).setView([9.0820, 8.6753], 15);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  const tileLayer = createTileLayer();
+  if (tileLayer) tileLayer.addTo(map);
 
   const icon = L.divIcon({
     className: 'custom-driver-pin',
