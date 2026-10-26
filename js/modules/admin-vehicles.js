@@ -101,14 +101,19 @@ function updateTrackingUi(source) {
 }
 
 async function loadDrivers() {
+  // Corrected column name from 'phone' to 'phone_number' to prevent 400 Bad Request
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, full_name, phone')
+    .select('id, full_name, phone_number')
     .eq('organization_id', orgId)
     .eq('role', 'driver')
     .order('full_name');
     
-  if (!error) drivers = data || [];
+  if (!error) {
+    drivers = data || [];
+  } else {
+    console.error('Error fetching drivers:', error);
+  }
   
   const select = document.getElementById('vehicle-driver-select');
   if (select) {
@@ -142,7 +147,9 @@ window.loadVehicles = async function() {
   }
   
   const driverMap = {};
-  drivers.forEach(d => { driverMap[d.id] = d; });
+  drivers.forEach(d => { 
+    driverMap[d.id] = d; 
+  });
 
   vehicles = (data || []).map(v => {
     // Standardize locations array or object
