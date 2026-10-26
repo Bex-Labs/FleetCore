@@ -1,6 +1,6 @@
 /**
- * ADMIN-TEAM.JS — Staff roster, multi-role invitations, user verification,
- * suspension, and account deletion for Company Admin.
+ * ADMIN-TEAM.JS — Staff roster, provisioning, account status toggle,
+ * verification, and account removal for Company Admin.
  */
 
 import { supabase, getUserProfile, formatDate, escapeHtml, avatarDataUri, statusBadge } from '../config.js';
@@ -229,9 +229,8 @@ window.handleStaffInvite = async function(e) {
   const original = btn.innerHTML;
 
   btn.disabled = true;
-  btn.innerHTML = `<i class="bi bi-arrow-repeat animate-spin"></i><span>Processing...</span>`;
+  btn.innerHTML = `<i class="bi bi-arrow-repeat animate-spin"></i><span>Provisioning...</span>`;
 
-  const mode = document.getElementById('invite-mode').value;
   const full_name = document.getElementById('invite-name').value.trim();
   const email = document.getElementById('invite-email').value.trim();
   const phone_number = document.getElementById('invite-phone').value.trim() || null;
@@ -247,6 +246,7 @@ window.handleStaffInvite = async function(e) {
   try {
     const tempPassword = `FleetCore@${Math.floor(100000 + Math.random() * 900000)}`;
 
+    // Call Supabase Edge Function with Admin Service Role
     const { data: edgeData, error: edgeError } = await supabase.functions.invoke('create-user', {
       body: { 
         email, 
@@ -260,34 +260,10 @@ window.handleStaffInvite = async function(e) {
     });
 
     if (edgeError || edgeData?.error) {
-      const { data: authData, error: authErr } = await supabase.auth.signUp({
-        email,
-        password: tempPassword,
-        options: {
-          data: {
-            full_name,
-            role,
-            organization_id: orgId,
-          }
-        }
-      });
-
-      if (authErr) throw authErr;
-
-      if (authData?.user) {
-        await supabase.from('profiles').upsert({
-          id: authData.user.id,
-          organization_id: orgId,
-          email,
-          full_name,
-          phone_number,
-          role,
-          status: 'active'
-        });
-      }
+      throw new Error(edgeError?.message || edgeData?.error || 'Failed to provision user via Edge Function.');
     }
 
-    showToast(`Account created for ${full_name} (${ROLE_LABELS[role]}). Welcome details dispatched to ${email}.`, 'success');
+    showToast(`Account provisioned for ${full_name}! Temp password: ${tempPassword}`, 'success', 8000);
     window.closeInviteModal();
     await window.loadTeam();
   } catch (err) {
