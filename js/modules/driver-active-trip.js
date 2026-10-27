@@ -1,6 +1,6 @@
 /**
  * DRIVER-ACTIVE-TRIP.JS — Live in-progress navigation, speed telemetry,
- * real-time coordinates broadcast, and post-trip fuel gate.
+ * throttled GPS coordinate broadcasts, and post-trip fuel gate.
  */
 
 import { supabase, getUserProfile, createTileLayer } from '../config.js';
@@ -14,6 +14,9 @@ let startTime = Date.now();
 let currentPos = [9.0820, 8.6753];
 let profile = null;
 
+let lastNavUpsertTime = 0;
+let lastNavCoord = null;
+
 const mapEl = document.getElementById('active-nav-map');
 if (mapEl) initNav();
 
@@ -23,7 +26,7 @@ async function initNav() {
 
   const { data: trip } = await supabase
     .from('trips')
-    .select('*, vehicle:vehicles(id, plate_number)')
+    .select('*, vehicle:vehicles(id, plate_number, tracking_source, tracker_imei)')
     .eq('driver_id', profile.id)
     .eq('status', 'in_progress')
     .order('started_at', { ascending: false })
@@ -70,14 +73,30 @@ function startNavStream() {
       const lng = pos.coords.longitude;
       const speedKm = Math.round((pos.coords.speed || 0) * 3.6);
       currentPos = [lat, lng];
+      const now = Date.now();
 
-      document.getElementById('telemetry-speed').textContent = speedKm;
+      const speedEl = document.getElementById('telemetry-speed');
+      if (speedEl) speedEl.textContent = speedKm;
+
       if (vehicleMarker && navMap) {
         vehicleMarker.setLatLng(currentPos);
         navMap.panTo(currentPos, { animate: true });
       }
 
-      if (currentTrip?.vehicle_id) {
+      // GUARD: If vehicle uses hardware GPS, do not overwrite coordinates from mobile
+      if (currentTrip?.vehicle?.tracking_source === 'hardware_gps' || currentTrip?.vehicle?.tracker_imei) {
+        return;
+      }
+
+      // DEBOUNCE: Min 3000ms interval AND >= 8m displacement
+      const dist = lastNavCoord 
+        ? Math.hypot(lat - lastNavCoord.lat, lng - lastNavCoord.lng) * 111000 
+        : 100;
+
+      if (currentTrip?.vehicle_id && (now - lastNavUpsertTime >= 3000) && dist >= 8) {
+        lastNavUpsertTime = now;
+        lastNavCoord = { lat, lng };
+
         await supabase.from('vehicle_locations').upsert({
           vehicle_id: currentTrip.vehicle_id,
           driver_id: profile.id,

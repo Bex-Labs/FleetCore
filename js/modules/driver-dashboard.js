@@ -1,6 +1,6 @@
 /**
  * DRIVER-DASHBOARD.JS — Real-time telemetry, 3-way crisis triggers, 
- * organization name resolution, avatar initials, and unit synchronization.
+ * hardware GPS conflict guarding, displacement throttles, and unit synchronization.
  */
 
 import { supabase, getUserProfile, formatDate, escapeHtml, createTileLayer } from '../config.js';
@@ -13,6 +13,9 @@ let map = null;
 let marker = null;
 let watchId = null;
 let broadcastInterval = null;
+
+let lastUpsertTime = 0;
+let lastCoord = null;
 
 const mapEl = document.getElementById('driver-map');
 if (mapEl) initDashboard();
@@ -93,6 +96,19 @@ function initMap() {
   marker = L.marker([9.0820, 8.6753], { icon }).addTo(map);
 }
 
+function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371e3;
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ/2) * Math.sin(Δλ/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 function startGpsTracking() {
   if (!navigator.geolocation) return;
 
@@ -100,18 +116,37 @@ function startGpsTracking() {
     async (pos) => {
       const { latitude, longitude, speed } = pos.coords;
       const kmh = Math.round((speed || 0) * 3.6);
+      const now = Date.now();
 
-      document.getElementById('speed-val').innerHTML = `${kmh} <small class="text-[10px] font-normal text-slate-500">km/h</small>`;
-      document.getElementById('gps-status').textContent = 'READY';
-      document.getElementById('gps-status-pill').className = "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-teal-50 text-teal-700 border border-teal-200/60";
-      document.getElementById('coords-badge').textContent = `${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`;
+      const speedEl = document.getElementById('speed-val');
+      const gpsStatus = document.getElementById('gps-status');
+      const gpsStatusPill = document.getElementById('gps-status-pill');
+      const coordsBadge = document.getElementById('coords-badge');
+
+      if (speedEl) speedEl.innerHTML = `${kmh} <small class="text-[10px] font-normal text-slate-500">km/h</small>`;
+      if (gpsStatus) gpsStatus.textContent = 'READY';
+      if (gpsStatusPill) gpsStatusPill.className = "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-teal-50 text-teal-700 border border-teal-200/60";
+      if (coordsBadge) coordsBadge.textContent = `${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`;
 
       if (marker && map) {
         marker.setLatLng([latitude, longitude]);
         map.panTo([latitude, longitude], { animate: true });
       }
 
-      if (assignedVehicle?.id) {
+      // GUARD: If vehicle uses SinoTrack hardware, do not overwrite coordinates from mobile
+      if (assignedVehicle?.tracking_source === 'hardware_gps' || assignedVehicle?.tracker_imei) {
+        if (gpsStatus) gpsStatus.textContent = 'HARDWARE SYNC';
+        return;
+      }
+
+      // DEBOUNCE: Only upsert if 3000ms elapsed AND moved at least 8 meters
+      const hasMoved = !lastCoord || calculateDistanceMeters(lastCoord.lat, lastCoord.lng, latitude, longitude) >= 8;
+      const timeElapsed = (now - lastUpsertTime) >= 3000;
+
+      if (assignedVehicle?.id && hasMoved && timeElapsed) {
+        lastUpsertTime = now;
+        lastCoord = { lat: latitude, lng: longitude };
+
         await supabase.from('vehicle_locations').upsert({
           vehicle_id: assignedVehicle.id,
           driver_id: profile.id,
@@ -126,17 +161,19 @@ function startGpsTracking() {
     },
     (err) => {
       console.warn('GPS Error:', err.message);
-      document.getElementById('gps-status').textContent = 'OFFLINE';
-      document.getElementById('gps-status-pill').className = "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200/60";
+      const gpsStatus = document.getElementById('gps-status');
+      const gpsStatusPill = document.getElementById('gps-status-pill');
+      if (gpsStatus) gpsStatus.textContent = 'OFFLINE';
+      if (gpsStatusPill) gpsStatusPill.className = "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200/60";
     },
-    { enableHighAccuracy: true, maximumAge: 4000, timeout: 10000 }
+    { enableHighAccuracy: true, maximumAge: 3000, timeout: 8000 }
   );
 }
 
 async function loadAssignedTrip() {
   const { data: trips } = await supabase
     .from('trips')
-    .select('*, vehicle:vehicles(id, plate_number, make, model)')
+    .select('*, vehicle:vehicles(id, plate_number, make, model, tracking_source, tracker_imei)')
     .eq('driver_id', profile.id)
     .in('status', ['in_progress', 'pending'])
     .order('created_at', { ascending: false })
@@ -158,7 +195,7 @@ async function loadAssignedTrip() {
     // Fallback check on vehicles table
     const { data: fallbackVehicle } = await supabase
       .from('vehicles')
-      .select('id, plate_number')
+      .select('id, plate_number, tracking_source, tracker_imei')
       .eq('assigned_driver_id', profile.id)
       .maybeSingle();
 
@@ -277,7 +314,6 @@ async function fireSOS(type, title, btn, label, originalText, severity = 'high')
     (err) => {
       showToast(`GPS error: ${err.message}. Enabling standard location fallback.`, 'warning');
       
-      // Fallback emergency insert without precise GPS
       supabase.from('incidents').insert({
         organization_id: profile.organization_id,
         driver_id: profile.id,

@@ -1,299 +1,302 @@
-/**
- * ADMIN-TEAM.JS — Staff roster, multi-role invitations, user verification,
- * suspension, and account deletion for Company Admin.
- */
-
-import { supabase, getUserProfile, formatDate, escapeHtml, avatarDataUri, statusBadge } from '../config.js';
-import { showToast } from '../auth.js';
-
-const ROLE_LABELS = {
-  company_admin:       'Company Admin', 
-  driver:              'Driver',
-  maintenance_officer: 'Maintenance Officer', 
-  account_manager:     'Account Manager',
-};
-
-const ROLE_BADGE_STYLES = {
-  company_admin:       'bg-purple-50 text-purple-700 border border-purple-200/60 font-bold',
-  driver:              'bg-blue-50 text-blue-700 border border-blue-200/60 font-semibold',
-  maintenance_officer: 'bg-teal-50 text-teal-700 border border-teal-200/60 font-semibold',
-  account_manager:     'bg-amber-50 text-amber-700 border border-amber-200/60 font-semibold',
-};
-
-const STATUS_MAP = {
-  active:    { label: 'Active / Verified', cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200/60' },
-  inactive:  { label: 'Suspended',         cls: 'bg-rose-50 text-rose-700 border border-rose-200/60' },
-  suspended: { label: 'Suspended',         cls: 'bg-rose-50 text-rose-700 border border-rose-200/60' },
-  pending:   { label: 'Unverified',        cls: 'bg-amber-50 text-amber-700 border border-amber-200/60' },
-};
-
-let orgId = null;
-let currentUserId = null;
-let teamMembers = [];
-
-const tbody = document.getElementById('team-tbody');
-if (tbody) initTeam();
-
-export async function initTeam() {
-  const profile = await getUserProfile();
-  if (!profile) return;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <title>FleetCore - Team & Role Management</title>
   
-  orgId = profile.organization_id;
-  currentUserId = profile.id;
+  <!-- Tailwind CSS with Forms and Container Queries -->
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&family=Inter:wght@400..700&display=swap" rel="stylesheet"/>
+  
+  <!-- Bootstrap Icons Standard -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"/>
 
-  // Hydrate header user information
-  const headerName = document.getElementById('header-user-name');
-  const headerAvatar = document.getElementById('header-avatar');
-  if (headerName) headerName.textContent = profile.full_name || 'Fleet Administrator';
-  if (headerAvatar && profile.full_name) {
-    const initials = profile.full_name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
-    headerAvatar.textContent = initials;
-  }
-
-  // Fetch true organization name
-  if (orgId) {
-    const { data: org } = await supabase
-      .from('organizations')
-      .select('name')
-      .eq('id', orgId)
-      .single();
-    
-    if (org && document.getElementById('fc-org-name')) {
-      document.getElementById('fc-org-name').textContent = org.name;
-    }
-  }
-
-  tbody.addEventListener('click', onTableActionClick);
-  await loadTeam();
-}
-window.initTeam = initTeam;
-
-window.loadTeam = async function() {
-  if (!tbody || !orgId) return;
-
-  tbody.innerHTML = `<tr><td colspan="6" class="py-12 text-center text-slate-400 font-medium">Fetching organization team roster...</td></tr>`;
-
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('organization_id', orgId)
-    .order('created_at', { ascending: false });
-
-  const empty = document.getElementById('team-empty-state');
-  const tableWrap = document.getElementById('team-table-container');
-
-  if (error) {
-    tbody.innerHTML = `<tr><td colspan="6" class="py-12 text-center text-rose-500 font-medium">Failed to load team: ${escapeHtml(error.message)}</td></tr>`;
-    return;
-  }
-
-  teamMembers = data || [];
-  const teamCount = document.getElementById('team-count');
-  if (teamCount) teamCount.textContent = `${teamMembers.length} Member${teamMembers.length === 1 ? '' : 's'}`;
-
-  if (teamMembers.length === 0) {
-    if (tableWrap) tableWrap.classList.add('hidden');
-    if (empty) empty.classList.remove('hidden');
-    return;
-  }
-
-  if (empty) empty.classList.add('hidden');
-  if (tableWrap) tableWrap.classList.remove('hidden');
-
-  tbody.innerHTML = teamMembers.map(p => {
-    const isSelf = p.id === currentUserId;
-    const isSuspended = p.status === 'inactive' || p.status === 'suspended';
-    const isUnverified = p.status === 'pending';
-
-    return `
-      <tr class="hover:bg-slate-50/75 transition border-b border-slate-100 group" data-id="${p.id}">
-        <td class="py-3.5 px-4">
-          <div class="flex items-center gap-3">
-            <img alt="Profile avatar" class="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0" src="${avatarDataUri(p.full_name)}"/>
-            <div>
-              <span class="text-xs font-bold text-slate-900 block">${escapeHtml(p.full_name || 'Unnamed')} ${isSelf ? '<span class="text-[10px] text-teal-600 font-semibold">(You)</span>' : ''}</span>
-              <span class="text-[10px] text-slate-400">${escapeHtml(p.phone_number || '')}</span>
-            </div>
-          </div>
-        </td>
-        <td class="py-3.5 px-4 font-mono text-xs text-slate-700">${escapeHtml(p.email || '—')}</td>
-        <td class="py-3.5 px-4">
-          <span class="text-[11px] px-2.5 py-0.5 rounded-lg ${ROLE_BADGE_STYLES[p.role] || 'bg-slate-100 text-slate-700'}">
-            ${escapeHtml(ROLE_LABELS[p.role] || p.role)}
-          </span>
-        </td>
-        <td class="py-3.5 px-4">${statusBadge(p.status || 'active', STATUS_MAP)}</td>
-        <td class="py-3.5 px-4 text-xs text-slate-500">${formatDate(p.created_at)}</td>
-        <td class="py-3.5 px-4 text-right">
-          ${!isSelf ? `
-            <div class="inline-flex items-center gap-1">
-              ${isUnverified ? `
-                <button class="p-1.5 text-slate-400 hover:text-emerald-600 rounded-lg hover:bg-slate-100 transition" data-action="verify" title="Verify User Account">
-                  <i class="bi bi-patch-check-fill text-sm"></i>
-                </button>` : ''}
-              
-              <button class="p-1.5 text-slate-400 hover:${isSuspended ? 'text-emerald-600' : 'text-amber-600'} rounded-lg hover:bg-slate-100 transition" data-action="toggle-status" title="${isSuspended ? 'Reactivate Account' : 'Suspend Account'}">
-                <i class="bi ${isSuspended ? 'bi-play-circle' : 'bi-pause-circle'} text-sm"></i>
-              </button>
-
-              <button class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-100 transition" data-action="delete" title="Delete User from Organization">
-                <i class="bi bi-trash3 text-sm"></i>
-              </button>
-            </div>
-          ` : `<span class="text-[11px] text-slate-400 italic">Protected</span>`}
-        </td>
-      </tr>`;
-  }).join('');
-};
-
-function onTableActionClick(e) {
-  const btn = e.target.closest('[data-action]');
-  if (!btn) return;
-
-  const id = btn.closest('tr[data-id]')?.getAttribute('data-id');
-  const member = teamMembers.find(m => m.id === id);
-  if (!member) return;
-
-  const action = btn.dataset.action;
-  if (action === 'verify') verifyUser(member);
-  if (action === 'toggle-status') toggleUserStatus(member);
-  if (action === 'delete') deleteUser(member);
-}
-
-async function verifyUser(member) {
-  if (!confirm(`Verify and activate ${member.full_name}'s account?`)) return;
-
-  const { error } = await supabase
-    .from('profiles')
-    .update({ status: 'active' })
-    .eq('id', member.id);
-
-  if (error) {
-    showToast(`Could not verify user: ${error.message}`, 'error');
-    return;
-  }
-
-  showToast(`${member.full_name}'s account is verified and active.`, 'success');
-  await window.loadTeam();
-}
-
-async function toggleUserStatus(member) {
-  const isSuspended = member.status === 'inactive' || member.status === 'suspended';
-  const nextStatus = isSuspended ? 'active' : 'suspended';
-
-  if (!confirm(`${isSuspended ? 'Reactivate' : 'Suspend'} ${member.full_name}'s account?`)) return;
-
-  const { error } = await supabase
-    .from('profiles')
-    .update({ status: nextStatus })
-    .eq('id', member.id);
-
-  if (error) {
-    showToast(`Could not update account status: ${error.message}`, 'error');
-    return;
-  }
-
-  showToast(`${member.full_name} has been ${nextStatus === 'active' ? 'reactivated' : 'suspended'}.`, 'success');
-  await window.loadTeam();
-}
-
-async function deleteUser(member) {
-  if (!confirm(`Permanently remove ${member.full_name} (${member.email}) from this organization? This action cannot be undone.`)) return;
-
-  const { error } = await supabase
-    .from('profiles')
-    .delete()
-    .eq('id', member.id);
-
-  if (error) {
-    showToast(`Could not delete user: ${error.message}`, 'error');
-    return;
-  }
-
-  showToast(`${member.full_name} removed from organization roster.`, 'success');
-  await window.loadTeam();
-}
-
-window.openInviteModal = function() {
-  document.getElementById('invite-modal')?.classList.remove('hidden');
-};
-
-window.closeInviteModal = function() {
-  document.getElementById('invite-modal')?.classList.add('hidden');
-  document.getElementById('invite-form')?.reset();
-};
-
-window.handleStaffInvite = async function(e) {
-  e.preventDefault();
-  const btn = document.getElementById('invite-save-btn');
-  const original = btn.innerHTML;
-
-  btn.disabled = true;
-  btn.innerHTML = `<i class="bi bi-arrow-repeat animate-spin"></i><span>Processing...</span>`;
-
-  const mode = document.getElementById('invite-mode').value;
-  const full_name = document.getElementById('invite-name').value.trim();
-  const email = document.getElementById('invite-email').value.trim();
-  const phone_number = document.getElementById('invite-phone').value.trim() || null;
-  const role = document.getElementById('invite-role').value;
-
-  if (!full_name || !email) {
-    showToast('Name and email are required.', 'error');
-    btn.disabled = false;
-    btn.innerHTML = original;
-    return;
-  }
-
-  try {
-    const tempPassword = `FleetCore@${Math.floor(100000 + Math.random() * 900000)}`;
-
-    const { data: edgeData, error: edgeError } = await supabase.functions.invoke('create-user', {
-      body: { 
-        email, 
-        full_name, 
-        role, 
-        phone_number, 
-        organization_id: orgId,
-        password: tempPassword,
-        send_email: true
-      },
-    });
-
-    if (edgeError || edgeData?.error) {
-      const { data: authData, error: authErr } = await supabase.auth.signUp({
-        email,
-        password: tempPassword,
-        options: {
-          data: {
-            full_name,
-            role,
-            organization_id: orgId,
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              navy: '#0B2545',
+              blue: '#134074',
+              teal: '#00A896',
+              mint: '#02C39A',
+              subtle: '#EEF4F8'
+            },
+            primary: "#004ac6",
+            "border-light": "#E2E8F0"
+          },
+          fontFamily: {
+            display: ["Manrope", "sans-serif"],
+            sans: ["Inter", "sans-serif"]
           }
         }
-      });
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans h-screen overflow-hidden flex flex-col antialiased" data-fc-guard="admin">
 
-      if (authErr) throw authErr;
+  <!-- Toast Notification Host -->
+  <div id="fc-toast-host" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none"></div>
 
-      if (authData?.user) {
-        await supabase.from('profiles').upsert({
-          id: authData.user.id,
-          organization_id: orgId,
-          email,
-          full_name,
-          phone_number,
-          role,
-          status: 'active'
-        });
+  <!-- Mobile Backdrop Overlay -->
+  <div id="mobile-overlay" class="fixed inset-0 bg-slate-900/60 z-40 hidden md:hidden backdrop-blur-sm transition-opacity"></div>
+
+  <!-- Top Navigation Bar -->
+  <header class="bg-white border-b border-border-light h-16 w-full flex justify-between items-center px-4 sm:px-6 sticky top-0 z-30 shrink-0">
+    <div class="flex items-center gap-3 sm:gap-4">
+      <button type="button" id="sidebar-toggle" class="md:hidden text-slate-600 hover:text-slate-900 focus:outline-none p-1 rounded-lg hover:bg-slate-100">
+        <i class="bi bi-list text-2xl"></i>
+      </button>
+      <div class="flex items-center gap-2 sm:gap-3">
+        <img alt="FleetCore Logo" class="h-7 sm:h-8 w-auto object-contain" src="../assets/images/logo.png" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 40 40\'%3E%3Crect width=\'40\' height=\'40\' rx=\'8\' fill=\'%230B2545\'/%3E%3Ctext x=\'20\' y=\'25\' font-size=\'14\' font-weight=\'bold\' fill=\'%2300A896\' text-anchor=\'middle\'%3EFC%3C/text%3E%3C/svg%3E'"/>
+        <span class="font-display font-black text-lg sm:text-xl tracking-tight text-brand-navy">FLEET<span class="text-teal-600">CORE</span></span>
+      </div>
+    </div>
+
+    <!-- Right Header Profile Badge & Actions -->
+    <div class="flex items-center gap-3 sm:gap-4">
+      <button type="button" onclick="openInviteModal()" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-teal-600 to-teal-500 hover:from-teal-700 hover:to-teal-600 text-white rounded-xl text-xs font-bold transition shadow-sm">
+        <i class="bi bi-person-plus-fill"></i>
+        <span>Add Staff</span>
+      </button>
+
+      <div class="h-5 w-[1px] bg-slate-200"></div>
+
+      <div class="flex items-center gap-2">
+        <div class="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-brand-blue" id="header-avatar">
+          <i class="bi bi-person-fill"></i>
+        </div>
+        <div class="hidden sm:flex flex-col text-left">
+          <span class="text-xs font-bold text-slate-800 leading-tight" id="header-user-name">Loading...</span>
+          <span class="text-[10px] font-semibold text-teal-600 uppercase tracking-wider">Company Admin</span>
+        </div>
+      </div>
+
+      <button type="button" id="logout-btn" class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-slate-100 transition" title="Log Out">
+        <i class="bi bi-box-arrow-right text-lg"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- Content Layout -->
+  <div class="flex flex-1 overflow-hidden relative">
+    
+    <!-- Side Navigation Bar -->
+    <aside id="sidebar" class="bg-white border-r border-border-light w-64 flex flex-col h-full p-4 gap-1 z-50 md:z-20 shrink-0 overflow-y-auto transition-transform duration-200 ease-in-out -translate-x-full md:translate-x-0 fixed md:relative top-0 bottom-0 left-0">
+      
+      <!-- Organization Title Pill -->
+      <div class="mb-4 px-3 py-2.5 bg-slate-50 border border-slate-100 rounded-xl">
+        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Active Fleet Organization</span>
+        <span class="text-sm font-extrabold text-brand-navy truncate block" id="fc-org-name">Loading Company...</span>
+      </div>
+
+      <!-- Nav Links -->
+      <nav class="flex-1 flex flex-col gap-1">
+        <a class="flex items-center gap-3 px-3.5 py-2.5 text-slate-600 hover:text-brand-navy hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="dashboard.html">
+          <i class="bi bi-grid-1x2 text-base"></i>
+          <span>Dashboard</span>
+        </a>
+        <a class="flex items-center gap-3 px-3.5 py-2.5 text-slate-600 hover:text-brand-navy hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="vehicles.html">
+          <i class="bi bi-truck text-base"></i>
+          <span>Vehicles</span>
+        </a>
+        <a class="flex items-center gap-3 px-3.5 py-2.5 text-slate-600 hover:text-brand-navy hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="drivers.html">
+          <i class="bi bi-person-badge text-base"></i>
+          <span>Drivers</span>
+        </a>
+        <a class="flex items-center gap-3 px-3.5 py-2.5 text-slate-600 hover:text-brand-navy hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="dispatch.html">
+          <i class="bi bi-signpost-split text-base"></i>
+          <span>Trips & Dispatch</span>
+        </a>
+        <a class="flex items-center gap-3 px-3.5 py-2.5 text-slate-600 hover:text-brand-navy hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="maintenance.html">
+          <i class="bi bi-tools text-base"></i>
+          <span>Maintenance</span>
+        </a>
+        <a class="flex items-center gap-3 px-3.5 py-2.5 text-slate-600 hover:text-brand-navy hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="finance.html">
+          <i class="bi bi-wallet2 text-base"></i>
+          <span>Finance & Fuel</span>
+        </a>
+        <a class="flex items-center gap-3 px-3.5 py-2.5 text-slate-600 hover:text-brand-navy hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="incidents.html">
+          <i class="bi bi-shield-exclamation text-base"></i>
+          <span>Crisis Center & SOS</span>
+        </a>
+        <a class="flex items-center gap-3 px-3.5 py-2.5 text-slate-600 hover:text-brand-navy hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="analytics.html">
+          <i class="bi bi-bar-chart-line text-base"></i>
+          <span>Analytics</span>
+        </a>
+        <a class="flex items-center gap-3 px-3.5 py-2.5 bg-blue-50 text-brand-blue font-bold text-xs rounded-xl transition border border-blue-100/60 shadow-sm" href="team.html">
+          <i class="bi bi-people text-base text-blue-600"></i>
+          <span>Team & Roles</span>
+        </a>
+        <a class="flex items-center gap-3 px-3.5 py-2.5 text-slate-600 hover:text-brand-navy hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="settings.html">
+          <i class="bi bi-gear text-base"></i>
+          <span>Settings</span>
+        </a>
+      </nav>
+
+      <!-- Bottom Profile Link -->
+      <div class="mt-auto pt-3 border-t border-slate-100 flex flex-col gap-1">
+        <a class="flex items-center gap-3 px-3.5 py-2 text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-xs font-semibold rounded-xl transition" href="profile.html">
+          <i class="bi bi-person text-base"></i>
+          <span>My Profile</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- Main Content Canvas -->
+    <main class="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-slate-50 w-full">
+      <div class="max-w-7xl mx-auto space-y-6">
+        
+        <!-- Header -->
+        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+          <div>
+            <h1 class="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Team & Access Control</h1>
+            <p class="text-xs sm:text-sm text-slate-500 mt-0.5">Manage staff permissions, verify accounts, suspend access, and provision operators.</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="loadTeam()" class="px-3.5 py-2 border border-slate-200 bg-white rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition shadow-sm flex items-center gap-1.5">
+              <i class="bi bi-arrow-clockwise"></i>
+              <span>Refresh Staff</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Roster Table Container -->
+        <div class="bg-white border border-slate-200/80 rounded-2xl overflow-hidden shadow-sm flex flex-col" id="team-table-container">
+          <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/75">
+            <div class="flex items-center gap-2">
+              <i class="bi bi-people text-slate-500"></i>
+              <h2 class="text-xs font-bold text-slate-700 uppercase tracking-wider">Organization Personnel Roster</h2>
+            </div>
+            <span class="text-xs text-slate-400 font-medium" id="team-count">0 Members</span>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b border-slate-100 text-xs font-bold text-slate-500 uppercase tracking-wider bg-slate-50/50">
+                  <th class="py-3 px-4">Staff Member</th>
+                  <th class="py-3 px-4">Email Address</th>
+                  <th class="py-3 px-4">Role & Access</th>
+                  <th class="py-3 px-4">Account Status</th>
+                  <th class="py-3 px-4">Date Joined</th>
+                  <th class="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 text-xs" id="team-tbody">
+                <tr><td colspan="6" class="py-12 text-center text-slate-400 font-medium">Fetching organization team roster...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Empty State Container -->
+        <div class="hidden" id="team-empty-state">
+          <div class="flex flex-col items-center justify-center py-20 text-center border border-dashed border-slate-200 rounded-2xl bg-white p-6">
+            <div class="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 text-2xl mb-3">
+              <i class="bi bi-people"></i>
+            </div>
+            <h3 class="text-sm font-bold text-slate-800 mb-1">No team members onboarded yet</h3>
+            <p class="text-xs text-slate-500 max-w-sm">Provision accounts for your Drivers, Service Technicians, and Account Managers.</p>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Provision Staff Account Modal -->
+  <div class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" id="invite-modal">
+    <div class="relative bg-white rounded-3xl border border-slate-100 shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 sm:p-7 animate-in fade-in duration-200">
+      
+      <div class="flex items-center justify-between pb-4 border-b border-slate-100 mb-4 sticky top-0 bg-white z-10">
+        <div class="flex items-center gap-2.5">
+          <div class="p-2 bg-blue-50 text-blue-600 rounded-xl">
+            <i class="bi bi-person-plus text-lg"></i>
+          </div>
+          <div>
+            <h3 class="font-display text-lg font-bold text-slate-900">Add Organization Member</h3>
+            <p class="text-xs text-slate-500">Provision a staff account directly under your organization.</p>
+          </div>
+        </div>
+        <button onclick="closeInviteModal()" class="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition" type="button">
+          <i class="bi bi-x-lg text-base"></i>
+        </button>
+      </div>
+
+      <form class="flex flex-col gap-4" id="invite-form" onsubmit="handleStaffInvite(event)">
+        
+        <div>
+          <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Full Name <span class="text-teal-600">*</span></label>
+          <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="invite-name" placeholder="e.g. Samuel Okon" required type="text"/>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Email Address <span class="text-teal-600">*</span></label>
+          <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="invite-email" placeholder="staff@company.com" required type="email"/>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Phone Number</label>
+          <input class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="invite-phone" placeholder="+234 800 000 0000" type="tel"/>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Designated Role & Access Level <span class="text-teal-600">*</span></label>
+          <select class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20" id="invite-role" required>
+            <option value="driver">Driver (Mobile Console & Trips)</option>
+            <option value="maintenance_officer">Maintenance Officer (Work Orders & Diagnostics)</option>
+            <option value="account_manager">Account Manager (Finance & Fuel Audits)</option>
+            <option value="company_admin">Company Admin (Full Operations Access)</option>
+          </select>
+        </div>
+
+        <div class="p-3 bg-blue-50/60 border border-blue-100 rounded-xl text-[11px] text-brand-blue flex items-center gap-2">
+          <i class="bi bi-shield-lock-fill text-blue-600 text-sm shrink-0"></i>
+          <span>An account will be created directly under this organization with a temporary password provided upon completion.</span>
+        </div>
+
+        <div class="flex justify-end gap-2 pt-3 border-t border-slate-100">
+          <button class="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition" onclick="closeInviteModal()" type="button">Cancel</button>
+          <button class="px-5 py-2 text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white rounded-xl shadow-md shadow-teal-600/20 transition flex items-center gap-1.5" id="invite-save-btn" type="submit">
+            <i class="bi bi-person-check-fill"></i>
+            <span>Provision Account</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="../js/config.js?v=7" type="module"></script>
+  <script src="../js/auth.js?v=7" type="module"></script>
+  <script src="../js/modules/admin-team.js?v=7" type="module"></script>
+
+  <script>
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('mobile-overlay');
+
+    function toggleMobileMenu() {
+      const isOpen = !sidebar.classList.contains('-translate-x-full');
+      if (isOpen) {
+        sidebar.classList.add('-translate-x-full');
+        overlay.classList.add('hidden');
+      } else {
+        sidebar.classList.remove('-translate-x-full');
+        overlay.classList.remove('hidden');
       }
     }
 
-    showToast(`Account created for ${full_name} (${ROLE_LABELS[role]}). Welcome details dispatched to ${email}.`, 'success');
-    window.closeInviteModal();
-    await window.loadTeam();
-  } catch (err) {
-    showToast(err.message || 'Could not complete staff account creation.', 'error');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = original;
-  }
-};
+    if (sidebarToggle) sidebarToggle.addEventListener('click', toggleMobileMenu);
+    if (overlay) overlay.addEventListener('click', toggleMobileMenu);
+  </script>
+</body>
+</html>

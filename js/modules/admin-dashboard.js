@@ -1,6 +1,6 @@
 /**
- * ADMIN-DASHBOARD.JS — Real-time telemetry, live queries, persistent Leaflet map,
- * smooth marker interpolation, 48-hour inactivity stale filter, and fleet alerts.
+ * ADMIN-DASHBOARD.JS — Real-time telemetry, dynamic marker pacing, auto-reconnecting
+ * realtime subscriptions, 48-hour inactivity stale filter, and fleet alerts.
  */
 
 import { supabase, getUserProfile, formatNaira, timeAgo, escapeHtml, createTileLayer } from '../config.js?v=4';
@@ -154,9 +154,9 @@ function createBusMarkerIcon(isActive) {
 }
 
 /**
- * Smoothly interpolates marker positions between updates
+ * Smoothly interpolates marker positions between updates matching telemetry cadence
  */
-function animateMarker(vehicleId, marker, startLatLng, endLatLng, durationMs = 4500) {
+function animateMarker(vehicleId, marker, startLatLng, endLatLng, durationMs = 3000) {
   if (markerAnimationFrames[vehicleId]) {
     cancelAnimationFrame(markerAnimationFrames[vehicleId]);
   }
@@ -282,14 +282,14 @@ function updateMapHeaderBadge(count) {
 }
 
 /**
- * Setup Realtime Subscriptions for GPS Location, Trips, and Incidents
+ * Setup Realtime Subscriptions with health check reconnection logic
  */
 function setupRealtimeSubscriptions(orgId) {
   if (!orgId) return;
 
-  supabase.channel(`fleet-dashboard-realtime-${orgId}`)
-    // Listen for GPS Telematics Coordinate Updates
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_locations' }, async (payload) => {
+  const channel = supabase.channel(`fleet-dashboard-realtime-${orgId}`)
+    // Listen for GPS Telematics Coordinate Updates filtered by organization
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_locations', filter: `organization_id=eq.${orgId}` }, async (payload) => {
       const loc = payload.new;
       if (!loc) return;
 
@@ -340,8 +340,9 @@ function setupRealtimeSubscriptions(orgId) {
           const currentPos = leafletMarkers[loc.vehicle_id].getLatLng();
           const targetPos = [loc.lat, loc.lng];
           
-          // Animate pin movement smoothly
-          animateMarker(loc.vehicle_id, leafletMarkers[loc.vehicle_id], [currentPos.lat, currentPos.lng], targetPos, 4500);
+          // Dynamically scale animation duration to telemetry age (bounded between 1.5s and 3.5s)
+          const pingAgeMs = Math.max(1500, Math.min(3500, Date.now() - new Date(loc.last_updated).getTime()));
+          animateMarker(loc.vehicle_id, leafletMarkers[loc.vehicle_id], [currentPos.lat, currentPos.lng], targetPos, pingAgeMs);
           leafletMarkers[loc.vehicle_id].setPopupContent(popupContent);
         } else {
           const marker = L.marker([loc.lat, loc.lng], {
@@ -371,7 +372,12 @@ function setupRealtimeSubscriptions(orgId) {
       loadKpis(orgId);
       loadActivityFeed(orgId);
     })
-    .subscribe();
+    .subscribe((status) => {
+      if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+        console.warn('Realtime channel interrupted. Reconnecting in 3s...');
+        setTimeout(() => channel.subscribe(), 3000);
+      }
+    });
 }
 
 /**

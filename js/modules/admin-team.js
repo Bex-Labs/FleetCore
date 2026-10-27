@@ -246,7 +246,6 @@ window.handleStaffInvite = async function(e) {
   try {
     const tempPassword = `FleetCore@${Math.floor(100000 + Math.random() * 900000)}`;
 
-    // Call Supabase Edge Function with Admin Service Role
     const { data: edgeData, error: edgeError } = await supabase.functions.invoke('create-user', {
       body: { 
         email, 
@@ -260,7 +259,7 @@ window.handleStaffInvite = async function(e) {
     });
 
     if (edgeError || edgeData?.error) {
-      throw new Error(edgeError?.message || edgeData?.error || 'Failed to provision user via Edge Function.');
+      throw new Error(edgeError?.message || edgeData?.error || 'Failed to provision user.');
     }
 
     showToast(`Account provisioned for ${full_name}! Temp password: ${tempPassword}`, 'success', 8000);
