@@ -73,8 +73,8 @@ export function showToast(message, type = 'info', duration = 4000) {
 window.showToast = window.showToast || showToast;
 
 /**
- * Primary Unified Login & Auto-Routing Handler
- * Validates tenant code, checks profile credentials, and redirects by role.
+ * Primary Unified Login & Auto-Routing Handler (TENANT USERS ONLY)
+ * Validates tenant code, checks profile credentials, and rejects Bex Super Admins.
  */
 export async function authenticateTenantUser(orgCode, email, password) {
   const cleanCode = (orgCode || '').trim().toUpperCase();
@@ -107,21 +107,22 @@ export async function authenticateTenantUser(orgCode, email, password) {
     throw new Error('User profile record not found. Please contact support.');
   }
 
+  // 3. 🚨 SECURITY BARRIER: Reject Platform Super Admins from Normal Login
+  const isSuperAdmin = profile.role === 'super_admin' || profile.role === 'bex_admin';
+  if (isSuperAdmin) {
+    await supabase.auth.signOut();
+    localStorage.clear();
+    sessionStorage.clear();
+    throw new Error('Access Restricted: Platform Super Admin accounts must authenticate via the dedicated Bex Control Portal.');
+  }
+
+  // 4. Verify Account Status
   if (profile.status === 'inactive' || profile.status === 'suspended') {
     await supabase.auth.signOut();
     throw new Error('Your account is currently inactive. Contact your administrator.');
   }
 
-  // 3. Platform Super Admin Bypass (No code required, or code "BEX")
-  const isSuperAdmin = profile.role === 'super_admin' || profile.role === 'bex_admin';
-  if (isSuperAdmin) {
-    localStorage.setItem('fc_user_role', 'super_admin');
-    localStorage.removeItem('fc_org_code');
-    window.location.href = rootPath(ROLE_REDIRECTS[profile.role] || '/bex-admin/dashboard.html');
-    return;
-  }
-
-  // 4. Validate Tenant Organization Code for regular organization accounts
+  // 5. Validate Tenant Organization Code
   if (!cleanCode) {
     await supabase.auth.signOut();
     throw new Error('Please enter your 3-letter Organization Code (e.g. TCL).');
@@ -148,19 +149,19 @@ export async function authenticateTenantUser(orgCode, email, password) {
     throw new Error(`Invalid credentials for organization code "${cleanCode}".`);
   }
 
-  // 5. Cache tenant details in local storage
+  // 6. Cache tenant details in local storage
   localStorage.setItem('fc_org_code', org.code);
   localStorage.setItem('fc_org_name', org.name);
   localStorage.setItem('fc_user_role', profile.role);
 
-  // 6. Auto-route by detected role
+  // 7. Auto-route by detected role
   redirectByRole(profile.role);
 }
 window.authenticateTenantUser = authenticateTenantUser;
 
 // Initialize Auth State Watcher
 if (supabase) {
-  supabase.auth.onAuthStateChange((event, session) => {
+  supabase.auth.onAuthStateChange(async (event, session) => {
     const authPages = ['index.html', 'forgot-password.html', 'reset-password.html', ''];
     const currentPage = window.location.pathname.split('/').pop();
     const isAuthPage = authPages.includes(currentPage) || currentPage === 'login.html';
@@ -170,10 +171,16 @@ if (supabase) {
       window.location.pathname.includes('confirm.html')
     ) return;
 
-    // Suppress automatic listener redirection if an explicit login attempt is running
     if (event === 'SIGNED_IN' && session && isAuthPage) {
       if (window.fcIsExplicitLogin) return;
-      redirectByRole();
+      
+      // Prevent automatic redirect of super admin into tenant portal from background auth listener
+      const role = await getUserRole();
+      if (role === 'super_admin' || role === 'bex_admin') {
+        await supabase.auth.signOut();
+        return;
+      }
+      redirectByRole(role);
     }
     
     if (event === 'SIGNED_OUT') {
@@ -196,6 +203,12 @@ export async function redirectByRole(passedRole) {
     showToast('Could not determine account role. Please contact support.', 'error'); 
     return; 
   }
+
+  // Super admins must not be routed to standard admin
+  if (role === 'super_admin' || role === 'bex_admin') {
+    window.location.replace(rootPath('bex-admin/dashboard.html'));
+    return;
+  }
   
   const path = ROLE_REDIRECTS[role] || '/admin/dashboard.html';
   const targetFolder = path.split('/')[1];
@@ -212,8 +225,14 @@ export async function guardRole(expectedFolder) {
     return; 
   }
 
-  // Super admins are permitted across all folders
-  if (role === 'super_admin' || role === 'bex_admin') return;
+  // If a Super Admin is attempting to access a tenant folder (e.g. /admin/, /driver/), bounce them to Bex
+  if (role === 'super_admin' || role === 'bex_admin') {
+    if (expectedFolder !== 'bex-admin') {
+      window.location.replace(rootPath('bex-admin/dashboard.html'));
+      return;
+    }
+    return;
+  }
   
   const path = ROLE_REDIRECTS[role];
   const folder = path ? path.split('/')[1] : null;
@@ -237,10 +256,10 @@ if (forgotForm && supabase) {
       redirectTo: `${BASE_URL}/reset-password.html` 
     });
     
-    if (error) {
-      showToast(error.message, 'error');
+    if (error) { 
+      showToast(error.message, 'error'); 
       if (btn) { btn.disabled = false; btn.innerHTML = 'Send Recovery Link'; }
-      return;
+      return; 
     }
     
     showToast(`Recovery link sent to ${email}`, 'success');

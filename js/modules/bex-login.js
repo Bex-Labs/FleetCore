@@ -15,7 +15,7 @@ export function initBexLogin() {
 
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
-    const totpCode = document.getElementById('totp').value.trim();
+    const totpCode = document.getElementById('totp') ? document.getElementById('totp').value.trim() : '';
 
     btn.disabled = true;
     btn.innerHTML = `<i class="bi bi-arrow-repeat animate-spin"></i> Authenticating...`;
@@ -24,6 +24,15 @@ export function initBexLogin() {
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
+
+      // Verify Role Privilege FIRST
+      const profile = await getUserProfile();
+      if (!profile || (profile.role !== 'bex_admin' && profile.role !== 'super_admin')) {
+        await supabase.auth.signOut();
+        localStorage.clear();
+        sessionStorage.clear();
+        throw new Error('Access denied. This console is restricted to Bex Platform Administrators.');
+      }
 
       // Check if user has TOTP enabled
       const { data: factors } = await supabase.auth.mfa.listFactors();
@@ -45,13 +54,7 @@ export function initBexLogin() {
         if (vfErr) throw new Error('Invalid TOTP token. Access denied.');
       }
 
-      // Verify Role Privilege
-      const profile = await getUserProfile();
-      if (!profile || (profile.role !== 'bex_admin' && profile.role !== 'super_admin')) {
-        await supabase.auth.signOut();
-        throw new Error('Access denied. Insufficient administrative privileges.');
-      }
-
+      localStorage.setItem('fc_user_role', profile.role);
       window.location.href = 'dashboard.html';
 
     } catch (err) {
